@@ -70,15 +70,34 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   }
 
   const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top] (outer box at full height)
-  // roads: a ribbon of per-segment quads, no miter joints (gaps at corners are fine at night scale).
+  // roads and water lines: one continuous strip. Per-segment butt quads left wedge gaps at every
+  // bend — the wider the road, the bigger the notch — so the strip now runs on per-vertex miter
+  // pairs (adjacent segment normals averaged, length hw / cos of the half-angle, clamped at 4 hw):
+  // both segments share the joint pair, the ribbon cannot open. End vertices keep plain butt ends.
   // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame
   const ribbon = (mb, pts, hw, dx, dz, y = 0.06) => {
-    for (let i = 0; i + 3 < pts.length; i += 2) {
-      const x0 = dx + pts[i] / 100, z0 = dz + pts[i + 1] / 100, x1 = dx + pts[i + 2] / 100, z1 = dz + pts[i + 3] / 100, ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez);
-      if (L < 1e-6) continue;
-      const nx = ez / L * hw, nz = -ex / L * hw;
-      mb.quad(mb.v(x0 - nx, y, z0 - nz, 0, 1, 0), mb.v(x0 + nx, y, z0 + nz, 0, 1, 0), mb.v(x1 + nx, y, z1 + nz, 0, 1, 0), mb.v(x1 - nx, y, z1 - nz, 0, 1, 0));
+    const n = pts.length / 2; if (n < 2) return;
+    const dirX = [], dirZ = []; // unit segment directions (degenerate segments inherit the previous)
+    for (let i = 0; i + 1 < n; i++) {
+      const ex = pts[i * 2 + 2] - pts[i * 2], ez = pts[i * 2 + 3] - pts[i * 2 + 1], L = hypot(ex, ez);
+      dirX[i] = L < 1e-6 ? (i ? dirX[i - 1] : 1) : ex / L;
+      dirZ[i] = L < 1e-6 ? (i ? dirZ[i - 1] : 0) : ez / L;
     }
+    const off = new Float64Array(n * 4); // per vertex: minus-x, minus-z, plus-x, plus-z
+    for (let i = 0; i < n; i++) {
+      let mx, mz; // the joint's outward direction: the segment's normal at the ends, their average inside
+      if (i === 0) { mx = dirZ[0]; mz = -dirX[0]; }
+      else if (i === n - 1) { mx = dirZ[i - 1]; mz = -dirX[i - 1]; }
+      else { mx = dirZ[i - 1] + dirZ[i]; mz = -(dirX[i - 1] + dirX[i]); const L = hypot(mx, mz);
+        if (L > 1e-9) { mx /= L; mz /= L; } else { mx = dirZ[i]; mz = -dirX[i]; } }
+      const seg = min(i, n - 2), px = dx + pts[i * 2] / 100, pz = dz + pts[i * 2 + 1] / 100;
+      const ml = min(hw / max(0.3, abs(mx * dirZ[seg] - mz * dirX[seg])), 4 * hw);
+      off[i * 4] = px - mx * ml; off[i * 4 + 1] = pz - mz * ml;
+      off[i * 4 + 2] = px + mx * ml; off[i * 4 + 3] = pz + mz * ml;
+    }
+    for (let i = 0; i + 1 < n; i++)
+      mb.quad(mb.v(off[i * 4], y, off[i * 4 + 1], 0, 1, 0), mb.v(off[i * 4 + 2], y, off[i * 4 + 3], 0, 1, 0),
+        mb.v(off[i * 4 + 6], y, off[i * 4 + 7], 0, 1, 0), mb.v(off[i * 4 + 4], y, off[i * 4 + 5], 0, 1, 0));
   };
   // a flat polygon triangulated by ear clipping (concave-safe, no fan spill) at height y;
   // pts already in tile-local metres. earclip's indices are pool-local: rebase onto the mesh (b0)
