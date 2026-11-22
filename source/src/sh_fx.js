@@ -84,7 +84,7 @@ const W_FX2 = /*wgsl*/`
   // ambient in the body: night keeps the water black glass (the sky table is dim, but the moon's share is cut too)
   let amb = (skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12) * mix(1., .35, view.night.x);
   let shw = shadow(p, vec3f(0., 1., 0.));
-  if (kind == 0u) { sig = vec3f(.26, .045, .04); scat = vec3f(.0, .035, .04) * amb; sA = .05; }
+  if (kind == 0u) { sig = vec3f(.6, .12, .08); scat = vec3f(.002, .05, .045) * amb; sA = .4; }
   else if (kind == 1u) { sig = vec3f(2.4, 3., 1.3); scat = vec3f(.011, .006, .12) * (.35 + .65 * shw); sA = 2.5; }
   else { sig = vec3f(.4, .08, .06); scat = vec3f(.001, .012, .028) * amb * (1. + 1.4 * sat(p.y * 2. + .15)); sA = .1; } // crests let more light through
   under = under * exp(-sig * (path + depth * .6)) + scat * (1. - exp(-sA * path));
