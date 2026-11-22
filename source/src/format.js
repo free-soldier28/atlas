@@ -13,7 +13,7 @@ const mpkInflate = async (b) => new Response(new Blob([b]).stream().pipeThrough(
 // tile (i): { x, z, lods: [ [layer, ...], ... ] } — layer by kind:
 // 1 buildings {pts: Int32Array(nPts*2), bkind, roof, h10, base10} per record
 // 2 roads {cls, flags, name, lanes, w10, pts} · 3/4 water-green {kind, pts}
-// 5 terrainPatch {cell, h: Int16Array}
+// 5 terrainPatch {cell, h: Int16Array} · 6 building holes {osmId, pts} (v2.1 courtyards)
 async function mpkTile(P, i) {
   let t = P.tiles.get(i);
   if (t) return t;
@@ -47,6 +47,10 @@ async function mpkTile(P, i) {
         } else if (kind === 5) {
           const cell = u8v(), n = u8v(); const h = new Int16Array(n * n); for (let j = 0; j < n * n; j++) h[j] = i16();
           recs.push({ cell, h });
+        } else if (kind === 6) { // building hole (v2.1): courtyard ring of the parent osmId, closed
+          const osmId = u32(), nPts = u16();
+          const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();
+          recs.push({ osmId, pts });
         } else { // unknown: skip the whole layer (forward compatibility)
           recs.push.apply(recs, [{ skip: true }]);
           break;

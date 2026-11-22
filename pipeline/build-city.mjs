@@ -1,8 +1,9 @@
 // builds packs/grodno.mpk from the Overpass caches produced by pipeline/fetch.mjs.
 // Projection: geoToLocal() metres about the pack origin, quantized to Int32 centimetres, tile-local.
 //
-// v1 simplifications (kept deliberately, both logged at build time):
-//  - building multipolygon relations: outer rings only, inner (hole) rings are dropped;
+// v1 simplifications (kept deliberately, logged at build time):
+//  - building multipolygon relations: outer rings become buildings, inner rings become kind-6
+//    hole records (v2.1 courtyards); rings split across ways are still not merged;
 //  - water: no width stored (renderer decides); graph: drivable classes 0..6 only
 //    (service roads render but do not route).
 // Node usage: node pipeline/build-city.mjs
@@ -183,21 +184,56 @@ const closeRing = (pts) => {
 };
 
 // pack-local metres → tile-local Int32 cm, assigned by the record's first point
-const tiles = new Map(); // "tx,tz" → { tx, tz, b, r, w, g }
-function assign(pts, kind, rec) {
-  const tx = Math.floor(pts[0] / S), tz = Math.floor(pts[1] / S), key = `${tx},${tz}`;
-  let t = tiles.get(key);
-  if (!t) tiles.set(key, t = { tx, tz, b: [], r: [], w: [], g: [] });
-  const ox = tx * S * CM, oz = tz * S * CM, out = new Array(pts.length);
+const tiles = new Map(); // "tx,tz" → { tx, tz, b, r, w, g, h }
+function assignTo(t, pts, kind, rec) {
+  const ox = t.tx * S * CM, oz = t.tz * S * CM, out = new Array(pts.length);
   for (let i = 0; i < pts.length; i++) out[i] = Math.round(pts[i] * CM) - (i % 2 ? oz : ox);
   t[kind].push({ ...rec, pts: out });
   return t;
 }
+function assign(pts, kind, rec) {
+  const tx = Math.floor(pts[0] / S), tz = Math.floor(pts[1] / S), key = `${tx},${tz}`;
+  let t = tiles.get(key);
+  if (!t) tiles.set(key, t = { tx, tz, b: [], r: [], w: [], g: [], h: [] });
+  return assignTo(t, pts, kind, rec);
+}
+
+// hole guards (courtyards, docs/mpk-format.md kind 6): signed shoelace area (m²), area centroid,
+// point-in-ring, proper segment crossing — a self-intersecting hole would break ear clipping
+const ringArea2 = (pts) => { let a = 0; for (let i = 0; i < pts.length; i += 2) { const j = (i + 2) % pts.length; a += pts[i] * pts[j + 1] - pts[j] * pts[i + 1]; } return a / 2; };
+const ringCentroid = (pts, a) => {
+  let cx = 0, cz = 0;
+  for (let i = 0; i < pts.length; i += 2) { const j = (i + 2) % pts.length, cr = pts[i] * pts[j + 1] - pts[j] * pts[i + 1]; cx += (pts[i] + pts[j]) * cr; cz += (pts[i + 1] + pts[j + 1]) * cr; }
+  return [cx / (6 * a), cz / (6 * a)];
+};
+const pip = (x, z, pts) => {
+  let inside = false;
+  for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    const zi = pts[i + 1], zj = pts[j + 1];
+    if ((zi > z) !== (zj > z) && x < (pts[j] - pts[i]) * (z - zi) / (zj - zi) + pts[i]) inside = !inside;
+  }
+  return inside;
+};
+const segCross = (ax, az, bx, bz, cx, cz, dx, dz) => { // proper crossing of ab and cd (touching is fine)
+  const o = (px, pz, qx, qz, rx, rz) => (qx - px) * (rz - pz) - (rx - px) * (qz - pz);
+  const d1 = o(cx, cz, dx, dz, ax, az), d2 = o(cx, cz, dx, dz, bx, bz), d3 = o(ax, az, bx, bz, cx, cz), d4 = o(ax, az, bx, bz, dx, dz);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+};
+const selfIntersects = (pts) => {
+  const n = pts.length >> 1;
+  const P = (i) => [pts[i * 2], pts[i * 2 + 1]];
+  for (let a = 0; a < n; a++) for (let b = a + 2; b < n; b++) {
+    if (a === 0 && b === n - 1) continue; // adjacent through the closing edge
+    const [ax, az] = P(a), [bx, bz] = P((a + 1) % n), [cx, cz] = P(b), [dx, dz] = P((b + 1) % n);
+    if (segCross(ax, az, bx, bz, cx, cz, dx, dz)) return true;
+  }
+  return false;
+};
 
 // ---------- load ----------
 console.log('build: reading caches...');
 const buildingsEls = readCache('buildings'), roadsEls = readCache('roads'), waterEls = readCache('water'), greenEls = readCache('green');
-const stats = { wayBuildings: 0, wayBuildingsOpen: 0, relBuildings: 0, relOuterRings: 0, relInnerDropped: 0, relOuterOpen: 0,
+const stats = { wayBuildings: 0, wayBuildingsOpen: 0, relBuildings: 0, relOuterRings: 0, relInner: 0, relInnerEmitted: 0, relInnerDropped: 0, relHoleSelfInt: 0, relOuterOpen: 0,
   highwayWays: 0, roadRecs: 0, roadSkipped: 0, graphNodes: 0, graphEdges: 0, waterLine: 0, waterPoly: 0, waterSkipped: 0, greenRecs: 0, greenSkipped: 0 };
 
 // ---------- buildings ----------
@@ -213,19 +249,41 @@ for (const el of buildingsEls) {
   for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags, el.id, el.type === 'relation'));
 }
 stats.relBuildings = buildingsEls.filter((e) => e.type === 'relation').length;
-// building multipolygon relations: v1 = outer rings only, inner rings (holes) dropped
+// building multipolygon relations: outer rings become buildings; inner rings become kind-6 hole
+// records (v2.1 courtyards) keyed by the relation's osmId, emitted into the parent outer's tile
 for (const el of buildingsEls) {
   if (el.type !== 'relation' || !el.tags?.building || !el.members) continue;
+  const outers = []; // { t (tile), ring (clipped pts, open) } — hole containment + tile routing
   for (const m of el.members) {
-    if (m.type !== 'way' || !m.geometry) continue;
-    if (m.role === 'inner') { stats.relInnerDropped++; continue; }
-    if (m.role !== 'outer') continue;
+    if (m.type !== 'way' || m.role !== 'outer' || !m.geometry) continue;
     if (!closedRing(m.geometry)) { stats.relOuterOpen++; continue; } // rings split across ways: not merged in v1
     if (emittedWayIds.has(m.ref)) continue;                        // already emitted as a standalone building
-    stats.relOuterRings++;
     const pts = ringPts(m.geometry);
     if (!pts || pts.length < 6) continue;
-    for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags, el.id, el.type === 'relation'));
+    for (const ring of clipRing(pts)) { stats.relOuterRings++; outers.push({ t: assign(ring, 'b', buildingRec(el.tags, el.id, true)), ring }); }
+  }
+  const holes = []; // accepted inner rings: { pts, oi } — oi indexes outers[]
+  for (const m of el.members) {
+    if (m.type !== 'way' || m.role !== 'inner' || !m.geometry) continue;
+    stats.relInner++;
+    if (!closedRing(m.geometry)) { stats.relInnerDropped++; continue; } // rings split across ways: not merged in v1
+    const raw = ringPts(m.geometry);
+    if (!raw || raw.length < 6) { stats.relInnerDropped++; continue; }
+    for (const pts of clipRing(raw)) {
+      const a = ringArea2(pts); // signed area, m²
+      if (Math.abs(a) < 20) { stats.relInnerDropped++; continue; } // < ~20 m²: lightwell, not a courtyard
+      const [cx, cz] = ringCentroid(pts, a);
+      const oi = outers.findIndex((o) => pip(cx, cz, o.ring));    // multi-outer relations share the osmId
+      if (oi < 0) { stats.relInnerDropped++; continue; }          // parent outer open/skipped or bad data
+      holes.push({ pts, oi });
+    }
+  }
+  // a self-intersecting hole would break ear clipping: drop that outer's holes, keep the rest
+  const bad = new Set(holes.filter((h) => selfIntersects(h.pts)).map((h) => h.oi));
+  for (const h of holes) {
+    if (bad.has(h.oi)) { stats.relInnerDropped++; stats.relHoleSelfInt++; continue; }
+    assignTo(outers[h.oi].t, closeRing(h.pts), 'h', { osmId: el.id });
+    stats.relInnerEmitted++;
   }
 }
 
@@ -354,6 +412,7 @@ const tileList = [...tiles.values()].sort((a, b) => a.tx - b.tx || a.tz - b.tz);
 for (const t of tileList) {
   const layers = [];
   if (t.b.length) layers.push({ kind: 1, recs: t.b });
+  if (t.h.length) layers.push({ kind: 6, recs: t.h }); // building holes (docs v2.1)
   if (t.r.length) layers.push({ kind: 2, recs: t.r });
   if (t.w.length) layers.push({ kind: 3, recs: t.w });
   if (t.g.length) layers.push({ kind: 4, recs: t.g });
@@ -368,6 +427,7 @@ writeFileSync(path.join(root, 'packs/grodno.mpk'), buf);
 const buildings = tileList.reduce((s, t) => s + t.b.length, 0), roads = tileList.reduce((s, t) => s + t.r.length, 0),
   water = tileList.reduce((s, t) => s + t.w.length, 0), green = tileList.reduce((s, t) => s + t.g.length, 0);
 stats.buildings = buildings;
+stats.holes = tileList.reduce((s, t) => s + t.h.length, 0);
 const dist = tileList.map((t) => ({ tile: `${t.tx},${t.tz}`, b: t.b.length, r: t.r.length, w: t.w.length, g: t.g.length }));
 const perTile = dist.map((d) => d.b + d.r + d.w + d.g);
 stats.tiles = dist;
@@ -375,7 +435,9 @@ stats.tileCount = dist.length;
 stats.fileSize = buf.length;
 writeFileSync(path.join(here, 'cache', 'grodno-stats.json'), JSON.stringify(stats, null, 1));
 
-console.log(`build: buildings ${buildings} (closed ways ${stats.wayBuildings}, open ways skipped ${stats.wayBuildingsOpen}; relations ${stats.relBuildings}: outer rings +${stats.relOuterRings}, inner dropped ${stats.relInnerDropped}, open outer skipped ${stats.relOuterOpen})`);
+console.log(`build: buildings ${buildings} (closed ways ${stats.wayBuildings}, open ways skipped ${stats.wayBuildingsOpen}; relations ${stats.relBuildings}: outer rings +${stats.relOuterRings}, inner rings ${stats.relInner} → ${stats.relInnerEmitted} holes (dropped ${stats.relInnerDropped}${stats.relHoleSelfInt ? `, ${stats.relHoleSelfInt} self-intersecting` : ''}), open outer skipped ${stats.relOuterOpen})`);
+const holeRecs = tileList.reduce((s, t) => s + t.h.length, 0), holeArea = tileList.reduce((s, t) => s + t.h.reduce((q, r) => q + Math.abs(ringArea2(r.pts)) / 1e4, 0), 0);
+console.log(`build: building holes ${holeRecs} records, ${(holeArea).toFixed(0)} m² of courtyards carved out of the roofs`);
 console.log(`build: roads ${roads} of ${stats.highwayWays} highway ways (skipped ${stats.roadSkipped} unmapped/degenerate)`);
 console.log(`build: water ${water} (lines ${stats.waterLine}, polygons ${stats.waterPoly}, skipped ${stats.waterSkipped}), green ${green} (skipped open ${stats.greenSkipped})`);
 console.log(`build: graph ${nodes.length} nodes, ${edges.length} edges (drivable classes 0..6; service renders, not routed)`);

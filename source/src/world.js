@@ -81,11 +81,12 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     }
   };
   // a flat polygon triangulated by ear clipping (concave-safe, no fan spill) at height y;
-  // pts already in tile-local metres
+  // pts already in tile-local metres. earclip's indices are pool-local: rebase onto the mesh (b0)
   const earMesh = (mb, pts, y) => {
     const { xs, zs, tris } = earclip(pts);
+    const b0 = mb.nv;
     for (let i = 0; i < xs.length; i++) mb.v(xs[i], y, zs[i], 0, 1, 0);
-    for (let i = 0; i < tris.length; i += 3) mb.tri(tris[i], tris[i + 1], tris[i + 2]);
+    for (let i = 0; i < tris.length; i += 3) mb.tri(b0 + tris[i], b0 + tris[i + 1], b0 + tris[i + 2]);
   };
 
   // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming).
@@ -93,7 +94,14 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   // ~360 m bounding radius per tile — the LOD switches and the frustum test both work per tile.
   for (let i = 0; i < PK.h.tiles.length; i++) {
     const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S, th = S / 2, tcx = ox + th, tcz = oz + th;
-    const city = cityTile(i, lods, ox, oz, S, bboxes); // buildings into tint buckets + road centre lines
+    // building holes (layer kind 6, docs/mpk-format.md): group by parent osmId — the matching
+    // relation-provenance buildings carve their roofs with them and wall the rings (courtyards)
+    let holes = null;
+    for (const L of lods) if (L.kind === 6) {
+      if (!holes) holes = new Map();
+      for (const r of L.recs) { const a = holes.get(r.osmId); if (a) a.push(r); else holes.set(r.osmId, [r]); }
+    }
+    const city = cityTile(i, lods, ox, oz, S, bboxes, holes); // buildings into tint buckets + road centre lines
     const mR = new MB(1 << 15), mW = new MB(1 << 12), mG = new MB(1 << 12);
     let nR = 0, nW = 0, nG = 0;
     for (const L of lods) {
@@ -123,7 +131,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
           const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
           earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
         }
-      } // kind 5 (terrain patches) and unknown kinds: skipped until terrain packs arrive
+      } // kind 1 → cityTile above; kind 6 holes consumed above; kind 5 (terrain) and unknown kinds: skipped
     }
     // buildings: one type per tint bucket; LODs run near → far (the cull pass switches up with distance),
     // so the facade carries slot 0, strips slot 1 and the plain prism slot 2. An empty LOD reuses its

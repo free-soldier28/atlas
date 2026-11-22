@@ -6,6 +6,9 @@ Encoder reference: `pipeline/lib/pack.mjs`. Decoder reference: `source/src/forma
 **Changing this file requires changing both references and bumping `v` in the header.**
 v1→v2: building records gained `osmId` (u32) and `src` (u8 provenance bits); the decoder
 still reads v1 (fields default to 0) so old packs load until rebuilt.
+v2→v2.1: the tile blob gains **layer kind 6** (building holes, below) — additive, so the
+header `v` stays 2: decoders skip unknown layer kinds and old packs load unchanged; a v2
+decoder simply renders hole-less (solid) roofs on v2.1 packs.
 
 ## File layout
 
@@ -55,7 +58,7 @@ u8  nLod                      // content levels, 0 = coarsest (far view), nLod-1
 per LOD:
   u8  nLayers
   per layer:
-    u8  kind                  // 1 buildings, 2 roads, 3 water, 4 green, 5 terrainPatch
+    u8  kind                  // 1 buildings, 2 roads, 3 water, 4 green, 5 terrainPatch, 6 buildingHole
     u32 nRec
     per record, by kind:
       buildings: u16 nPts, u8 bkind, u8 roof, i16 h10, i16 base10, u32 osmId, u8 src, i32 pts[nPts*2]
@@ -65,6 +68,15 @@ per LOD:
                  // src provenance bits: 0-1 height source (0 prior/default estimate, 1 levels×3.2,
                  //   2 real height tag), 2 roof:shape tagged, 3 colour tagged, 4 osmId is a relation,
                  //   5-7 reserved — the analysis tools read these (pipeline/report.mjs)
+      buildingHole: u32 osmId, u16 nPts, i32 pts[nPts*2]
+                 // one inner (courtyard) ring of a building multipolygon; osmId is the PARENT
+                 // relation's id and matches the outer-ring building record(s) carrying it; pts
+                 // are tile-local cm of a CLOSED ring. The renderer ear-clips the parent's roof
+                 // with these holes and walls the ring (courtyard facades). Holes live in the
+                 // same tile as their parent outer ring. Builders may omit small (< ~20 m²) or
+                 // degenerate holes; a renderer must tolerate missing holes (old packs) and skip
+                 // holes whose centroid falls outside the matching outer ring (multi-outer
+                 // relations share one osmId).
       roads:     u8 cls, u8 flags, u16 name, u8 lanes, i16 w10, u16 nPts, i32 pts[nPts*2]
                  // cls: 0 motorway,1 trunk,2 primary,3 secondary,4 tertiary,5 residential,
                  //      6 unclassified/living,7 service,8 pedestrian,9 footway,10 path;
@@ -104,5 +116,8 @@ duty, engine just walks edges).
   (water line kinds 8-10 are additive to the v2 table for exactly this reason).
 - Polygon records (water 0-3, green) must arrive CLOSED: first point == last point, 1 cm tolerance.
   Line records (water 8-10) are open centrelines — never fan-triangulate them.
+- Building-hole records (layer kind 6) also arrive CLOSED; they attach to the building record(s)
+  sharing their osmId in the same tile. Building footprints themselves stay open (closure not
+  required).
 - Tile coords can be negative (city origin inside the bbox).
 - All integers little-endian, packed (no alignment padding).

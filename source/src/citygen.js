@@ -73,13 +73,19 @@ const panes = (F, si, base, ground, upper, pitch, cb) => {
   for (let i = 0; i < cnt; i++) { const u0 = gap + i * (pw + gap); cb(u0, u0 + pw, sill, head, i); }
 };
 const ecOf = (iT, iB, fi, si, pi) => 1 + (h2(iT * 8 + 3, iB * 61 + fi * 17 + si * 5 + pi) * 254 | 0);
-// flat roof triangulated by ear clipping at y (concave footprints poke through walls with a fan)
-const roofTri = (mb, X, Z, n, y) => {
+// flat roof triangulated by ear clipping at y (concave footprints poke through walls with a fan);
+// holes: courtyard rings ([x,z,...] metres) carved out of the top. earclip returns pool-local
+// triangle indices — rebased onto the mesh with b0 (each call appends its vertices). Earclip
+// trouble, or holes that kill the triangulation: plain roof, no holes, rather than no roof.
+const roofTri = (mb, X, Z, n, y, holes) => {
   const pts = new Array(n * 2);
   for (let i = 0; i < n; i++) { pts[i * 2] = X[i]; pts[i * 2 + 1] = Z[i]; }
-  const { xs, zs, tris } = earclip(pts);
-  for (let i = 0; i < xs.length; i++) mb.v(xs[i], y, zs[i], 0, 1, 0);
-  for (let i = 0; i < tris.length; i += 3) mb.tri(tris[i], tris[i + 1], tris[i + 2]);
+  let c;
+  try { c = earclip(pts, holes || []); if (!c.tris.length && holes && holes.length) c = earclip(pts); }
+  catch { c = earclip(pts); }
+  const b0 = mb.nv;
+  for (let i = 0; i < c.xs.length; i++) mb.v(c.xs[i], y, c.zs[i], 0, 1, 0);
+  for (let i = 0; i < c.tris.length; i += 3) mb.tri(b0 + c.tris[i], b0 + c.tris[i + 1], b0 + c.tris[i + 2]);
 };
 // broken centre-line paint: 1.5 m marks every 4.5 m, one thin quad each (tile-local pts in cm)
 const cityDashes = (mb, pts, ox, oz) => {
@@ -96,8 +102,10 @@ const cityDashes = (mb, pts, ox, oz) => {
 };
 
 // one building: emit far / mid / near walls into its tint bucket, roof far / near into its roof bucket.
+// holes: this building's kind-6 courtyard rings (docs/mpk-format.md, matched by osmId) or null —
+// they are carved out of the roof and walled base→top in every LOD.
 // ox / oz: mesh origin (tile-local); cx / cz: the tile's world centre, for the collision box only
-function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
+function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   const n = r.pts.length / 2; if (n < 2) return;
   let X = new Float64Array(n), Z = new Float64Array(n), A = 0;
   for (let i = 0; i < n; i++) { X[i] = ox + r.pts[i * 2] / 100; Z[i] = oz + r.pts[i * 2 + 1] / 100; }
@@ -113,6 +121,25 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
   if (top - base < 0.1 || x1 - x0 < 0.1 || z1 - z0 < 0.1) return; // degenerate slivers (as before, no box)
   bboxes.push(x0 + cx, z0 + cz, x1 + cx, z1 + cz, top);
   const area = A / 2, h = top - base;
+  // courtyard holes matched by osmId (kind 6): metres, oriented CW so wall frames face into the
+  // void. Lightwells (< ~20 m²) and holes whose centroid leaves this outer ring (multi-outer
+  // relations share the relation id) are ignored.
+  const H = [];
+  if (holes) for (const hr of holes) {
+    const m = hr.pts.length >> 1; if (m < 3) continue;
+    let hx = new Float64Array(m), hz = new Float64Array(m), a = 0, sx = 0, sz = 0;
+    for (let i = 0; i < m; i++) { hx[i] = ox + hr.pts[i * 2] / 100; hz[i] = oz + hr.pts[i * 2 + 1] / 100; }
+    for (let i = 0; i < m; i++) { // shoelace + area centroid, after the fill (hz[i+1] must exist)
+      const j = (i + 1) % m; const cr = hx[i] * hz[j] - hx[j] * hz[i]; a += cr; sx += (hx[i] + hx[j]) * cr; sz += (hz[i] + hz[j]) * cr;
+    }
+    if (abs(a) < 40) continue; // raw shoelace sum is 2×area: < 20 m² is a lightwell, not a courtyard
+    let inside = false;        // area centroid inside THIS outer ring? (ray cast)
+    const px = sx / (3 * a), pz = sz / (3 * a);
+    for (let i = 0, j = n - 1; i < n; j = i++) if ((Z[i] > pz) !== (Z[j] > pz) && px < (X[j] - X[i]) * (pz - Z[i]) / (Z[j] - Z[i]) + X[i]) inside = !inside;
+    if (!inside) continue;
+    if (a > 0) { const tx = new Float64Array(m), tz = new Float64Array(m); for (let i = 0; i < m; i++) { tx[i] = hx[m - 1 - i]; tz[i] = hz[m - 1 - i]; } hx = tx; hz = tz; }
+    H.push({ X: hx, Z: hz, n: m });
+  }
   const storeys = max(1, round(h / 3.2)), ground = storeys > 1 ? min(4, h * 0.55) : h, upper = storeys > 1 ? (h - ground) / (storeys - 1) : 1;
   // roof cap: ridge along the longer bbox side through the bbox centre; too low stays flat
   const axX = x1 - x0 >= z1 - z0, pc = axX ? (z0 + z1) / 2 : (x0 + x1) / 2, halfP = (axX ? z1 - z0 : x1 - x0) / 2;
@@ -120,6 +147,9 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
   let amin = 1e9, amax = -1e9;
   for (let i = 0; i < n; i++) { const a = axX ? X[i] : Z[i]; amin = min(amin, a); amax = max(amax, a); }
   let roof = r.roof === 1 || r.roof === 2 ? r.roof : 0, rise = 0;
+  // caps only on small plain footprints: big/industrial roofs are flat in reality, and a gabled
+  // cap over a holey complex would bridge the courtyards
+  if (roof && (area > 4000 || H.length)) roof = 0;
   if (roof) { rise = max(0.15, min(clamp((roof === 1 ? 0.58 : 0.5) * halfP, 0.5, 3.4), h - 2.2)); if (rise < 0.15) roof = 0; }
   const eaves = roof ? top - rise : top;
   // walls near stop at the eaves, so their storey rhythm shrinks with it
@@ -135,6 +165,12 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
   const wb = wallB(wt), rb = roofB(rt);
   const F = [];
   for (let i = 0; i < n; i++) { const j = (i + 1) % n, f = fWall(X[i], Z[i], X[j], Z[j]); if (f) { f.y0 = base; F.push(f); } }
+  // courtyard wall frames (hole rings CW → normals face into the void); pane seeds continue after
+  // the outer frames' index space, so existing buildings' windows are untouched
+  const HF = [];
+  for (const h of H) for (let i = 0; i < h.n; i++) { const j = (i + 1) % h.n, f = fWall(h.X[i], h.Z[i], h.X[j], h.Z[j]); if (f) { f.y0 = base; HF.push(f); } }
+  // hole rings for the roof earclip (any winding — earclip forces holes CW against the outer)
+  const HR = H.map((h) => { const p = new Array(h.n * 2); for (let i = 0; i < h.n; i++) { p[i * 2] = h.X[i]; p[i * 2 + 1] = h.Z[i]; } return p; });
   // windows: none on garages or 1-storey sheds; bays only on mid-size non-industrial footprints
   const winOK = storeys >= 2 && r.bkind !== 6;
   const bays = winOK && r.bkind !== 4 && area >= 45 && area <= 1100;
@@ -144,23 +180,32 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
   const doorF = F2[0];
   const pitchN = BPITCH, pitchM = BPITCH_M;
 
-  // far: plain prism walls; ear-clip roof top
+  // far: plain prism walls (outer + courtyards); ear-clip roof top with the holes
   wb.f.mat = M.PLASTER;
   for (const f of F) wquad(wb.f, f, 0, f.L, base, top, 0, -1);
+  for (const f of HF) wquad(wb.f, f, 0, f.L, base, top, 0, -1);
   rb.f.mat = M.ROCK;
-  roofTri(rb.f, X, Z, n, top);
+  roofTri(rb.f, X, Z, n, top, HR);
 
   // mid: walls + floor bands (long walls) + window strips
   const m = wb.m; m.mat = M.PLASTER;
   for (const f of F) wquad(m, f, 0, f.L, base, top, 0, -1);
+  for (const f of HF) wquad(m, f, 0, f.L, base, top, 0, -1);
   for (const f of F2) for (let k = 1; k < storeys; k++) { const y = base + ground + (k - 1) * upper; wquad(m, f, 0, f.L, y - 0.09, y + 0.09, 0.03, 0.8); }
-  if (winOK) for (let fi = 0; fi < F.length; fi++) for (let si = 0; si < storeys; si++)
-    panes(F[fi], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(m, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
+  if (winOK) {
+    for (let fi = 0; fi < F.length; fi++) for (let si = 0; si < storeys; si++)
+      panes(F[fi], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(m, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
+    for (let k = 0; k < HF.length; k++) for (let si = 0; si < storeys; si++)
+      panes(HF[k], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(m, HF[k], u0, u1, v0, v1, 0.015, ecOf(iT, iB, F.length + k, si, pi)));
+  }
 
   // near: facade — walls, bands, bays on the long walls (strips on small ones), door, cornice, parapet
   const b = wb.n; b.mat = M.PLASTER;
   for (const f of F) wquad(b, f, 0, f.L, base, eaves, 0, -1);
+  for (const f of HF) wquad(b, f, 0, f.L, base, eaves, 0, -1);
   for (const f of F2) for (let k = 1; k < storeysN; k++) { const y = base + groundN + (k - 1) * upperN; wquad(b, f, 0, f.L, y - 0.09, y + 0.09, 0.03, 0.8); }
+  const HF2 = [...HF].sort((p, q) => q.L - p.L).slice(0, 2); // courtyard bands ride the 2 longest hole walls
+  for (const f of HF2) for (let k = 1; k < storeysN; k++) { const y = base + groundN + (k - 1) * upperN; wquad(b, f, 0, f.L, y - 0.09, y + 0.09, 0.03, 0.8); }
   const doorSlot = (max(1, round((doorF.L - 1.8) / pitchN)) - 1) >> 1;
   if (winOK && !bays && area < 45) for (let fi = 0; fi < F.length; fi++) for (let si = 0; si < storeysN; si++)
     panes(F[fi], si, base, groundN, upperN, pitchN, (u0, u1, v0, v1, pi) => pane(b, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
@@ -207,20 +252,25 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
         rb.n.tri(V(p0), V(p1), V(ap));
       }
     }
-  } else { rb.n.mat = M.ROCK; roofTri(rb.n, X, Z, n, top); }
+  } else { rb.n.mat = M.ROCK; roofTri(rb.n, X, Z, n, top, HR); }
 }
 
 // a tile's buildings and road paint: buckets keyed by packed tint (deterministic mesh grouping).
+// holes: Map osmId → [kind-6 recs] (world.js groups the tile's hole layers); only relation-provenance
+// buildings (src bit 4) can receive them — osmIds of ways and relations are different id spaces.
 // Meshes come out tile-centre-local: the caller places each instance at (ox + S/2, oz + S/2), so the
 // cull pass gets a ~360 m bounding radius per tile and the LOD distances mean what they say.
-function cityTile(iT, lods, ox, oz, S, bboxes) {
+function cityTile(iT, lods, ox, oz, S, bboxes, holes) {
   const h = S / 2, cx = ox + h, cz = oz + h;
   const walls = new Map(), roofs = new Map();
   let dash = null;
   const wallB = (t) => { let b = walls.get(t); if (!b) walls.set(t, b = { t, n: new MB(1 << 11), m: new MB(1 << 11), f: new MB(1 << 10) }); return b; };
   const roofB = (t) => { let b = roofs.get(t); if (!b) roofs.set(t, b = { t, n: new MB(1 << 10), f: new MB(1 << 9) }); return b; };
   for (const L of lods) {
-    if (L.kind === 1) for (let iB = 0; iB < L.recs.length; iB++) cityBuilding(iT, iB, L.recs[iB], -h, -h, cx, cz, wallB, roofB, bboxes);
+    if (L.kind === 1) for (let iB = 0; iB < L.recs.length; iB++) {
+      const r = L.recs[iB];
+      cityBuilding(iT, iB, r, -h, -h, cx, cz, wallB, roofB, bboxes, holes && (r.src & 16) ? holes.get(r.osmId) : null);
+    }
     else if (L.kind === 2) for (const r of L.recs) if (r.cls <= 3) { if (!dash) dash = new MB(1 << 12); cityDashes(dash, r.pts, -h, -h); }
   }
   return { walls, roofs, dash };

@@ -3,14 +3,12 @@
 // Regression net for the session bugs: fan/ear-triangulation spill, world-coordinate tile
 // instances breaking culling, kind collisions. Assertions are properties, not exact counts.
 //
-// KNOWN LIVE ENGINE BUG (dormant gate below): world.js earMesh (lines 86-88) and citygen.js
-// roofTri (lines 80-82) feed earclip's record-local triangle indices straight into the shared
-// mesh without adding its current vertex base, so every record after the first in a mesh renders
-// as a duplicate of the first one (water/green spill, flat roofs destroyed) and its own vertices
-// are orphaned. The orphaned-vertex count is that bug's exact structural signature: while it is
-// non-zero the orphan + area-budget test reports as skipped with its measured numbers; once the
-// 2-line fix lands (b0 = mb.nv before the mb.v loop, b0 + tris[i] inside mb.tri) the same
-// assertions become strict with no edit here.
+// FIXED BUG (gate below now strict): world.js earMesh and citygen.js roofTri used to feed
+// earclip's record-local triangle indices straight into the shared mesh without adding its
+// vertex base, so every record after the first in a mesh rendered as a duplicate of the first
+// one and its own vertices were orphaned. The 2-line rebase (b0 = mb.nv before the mb.v loop,
+// b0 + tris[i] inside mb.tri) has landed; the orphan + area-budget assertions below run strict.
+// holes.test.mjs extends this net to building-hole roofs specifically.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { engine, openPack } from '../lib/worldharness.mjs';

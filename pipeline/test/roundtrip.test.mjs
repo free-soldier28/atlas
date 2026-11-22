@@ -31,7 +31,7 @@ test('grodno.mpk: header, tiles present', async () => {
 test('grodno.mpk: every tile decodes, record shapes sane', async () => {
   const P = await openPack();
   assert.equal(P.tiles.size, P.h.tiles.length, 'not every tile decoded');
-  let nB = 0, nR = 0, nW = 0, nG = 0;
+  let nB = 0, nR = 0, nW = 0, nG = 0, nH = 0;
   P.h.tiles.forEach(([tx, tz], i) => {
     const t = P.tiles.get(i);
     assert.ok(t && t.lods.length >= 1);
@@ -53,6 +53,12 @@ test('grodno.mpk: every tile decodes, record shapes sane', async () => {
         } else if (layer.kind === 3 || layer.kind === 4) { // water / green polygons & lines
           layer.kind === 3 ? nW++ : nG++;
           assert.ok(even >= 4, `kind ${layer.kind} record with ${even / 2} pts`);
+        } else if (layer.kind === 6) { // building holes (v2.1): parent osmId, closed ring, ≥3 pts
+          nH++;
+          assert.ok(r.osmId > 0, `tile ${tx},${tz}: hole without a parent osmId`);
+          assert.ok(even >= 8, `hole ring with ${even / 2} pts`);
+          const dx = r.pts[0] - r.pts[even - 2], dz = r.pts[1] - r.pts[even - 1];
+          assert.ok(dx * dx + dz * dz <= 1, `tile ${tx},${tz}: hole ring open — must arrive closed (docs v2.1)`);
         } else assert.fail(`unexpected layer kind ${layer.kind}`);
         // coordinates: unfold tile-local cm → pack-local cm; content is clipped to bbox ± 2 km,
         // so every stored point must sit inside that (the ±40 km net catches projection bugs).
@@ -65,8 +71,9 @@ test('grodno.mpk: every tile decodes, record shapes sane', async () => {
       }
     }
   });
-  console.log(`roundtrip: decoded ${P.h.tiles.length} tiles — buildings ${nB}, roads ${nR}, water ${nW}, green ${nG}`);
+  console.log(`roundtrip: decoded ${P.h.tiles.length} tiles — buildings ${nB}, roads ${nR}, water ${nW}, green ${nG}, holes ${nH}`);
   assert.ok(nB > 30000 && nR > 30000, 'record counts far below the measured Overpass totals');
+  assert.ok(nH > 30, `${nH} building-hole records — multipolygon inner rings are being dropped again?`);
 });
 
 test('grodno.mpk: water polygons (kinds 0-3) and green rings arrive CLOSED, water lines are 8-10', async () => {
