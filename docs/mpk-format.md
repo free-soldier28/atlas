@@ -70,7 +70,12 @@ per LOD:
                  //      6 unclassified/living,7 service,8 pedestrian,9 footway,10 path;
                  // flags bit0 oneway; w10: full width in 0.1 m (0 = use cls default)
       water/green: u8 kind, u16 nPts, i32 pts[nPts*2]
-                 // water kind: 0 river, 1 lake, 2 canal, 3 pond; green kind: 0 park,1 forest,2 grass
+                 // water POLYGON kinds: 0 riverbank, 1 lake, 2 canal, 3 pond — closed rings
+                 //   (first point == last point, tolerance 1 cm; the pipeline appends the first
+                 //   point after clipping), triangulated as simple polygons, never fans
+                 // water LINE kinds: 8 river, 9 stream, 10 canal — open centrelines; renderers
+                 //   widen them into ribbons (river 55 m, stream 4 m, canal 15 m full width)
+                 // green kind: 0 park, 1 forest, 2 grass, 3 other — closed rings, same contract
       terrainPatch: u8 cell, u8 n, i16 h[n*n]   // decimetres, row-major, local to the tile's corner
 ```
 
@@ -95,6 +100,9 @@ duty, engine just walks edges).
 
 - `name` is an index into `header.strings`; 0 = unnamed.
 - Records may be listed in any order; the engine never assumes sorting.
-- Unknown layer kinds / bkind codes must be skipped, not fatal: packs are forward-compatible.
+- Unknown layer kinds / bkind codes must be skipped, not fatal: packs are forward-compatible
+  (water line kinds 8-10 are additive to the v2 table for exactly this reason).
+- Polygon records (water 0-3, green) must arrive CLOSED: first point == last point, 1 cm tolerance.
+  Line records (water 8-10) are open centrelines — never fan-triangulate them.
 - Tile coords can be negative (city origin inside the bbox).
 - All integers little-endian, packed (no alignment padding).

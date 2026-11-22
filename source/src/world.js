@@ -9,6 +9,8 @@ const Q0 = [0, 0, 0, 1];
 
 // road class → full width in metres when the record's w10 is 0 (docs/mpk-format.md)
 const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
+// water line kinds → full width in metres (centrelines widened into ribbons; docs/mpk-format.md)
+const WW = { 8: 55, 9: 4, 10: 15 };
 
 async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const meshes = [], types = [];
@@ -70,18 +72,20 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top] (outer box at full height)
   // roads: a ribbon of per-segment quads, no miter joints (gaps at corners are fine at night scale).
   // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame
-  const ribbon = (mb, pts, hw, dx, dz) => {
+  const ribbon = (mb, pts, hw, dx, dz, y = 0.06) => {
     for (let i = 0; i + 3 < pts.length; i += 2) {
       const x0 = dx + pts[i] / 100, z0 = dz + pts[i + 1] / 100, x1 = dx + pts[i + 2] / 100, z1 = dz + pts[i + 3] / 100, ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez);
       if (L < 1e-6) continue;
       const nx = ez / L * hw, nz = -ex / L * hw;
-      mb.quad(mb.v(x0 - nx, 0.06, z0 - nz, 0, 1, 0), mb.v(x0 + nx, 0.06, z0 + nz, 0, 1, 0), mb.v(x1 + nx, 0.06, z1 + nz, 0, 1, 0), mb.v(x1 - nx, 0.06, z1 - nz, 0, 1, 0));
+      mb.quad(mb.v(x0 - nx, y, z0 - nz, 0, 1, 0), mb.v(x0 + nx, y, z0 + nz, 0, 1, 0), mb.v(x1 + nx, y, z1 + nz, 0, 1, 0), mb.v(x1 - nx, y, z1 - nz, 0, 1, 0));
     }
   };
-  // a flat polygon fan at height y (convex or star-shaped around vertex 0 — enough for pack areas)
-  const fan = (mb, pts, y, up) => {
-    const n = pts.length / 2, i0 = mb.v(pts[0], y, pts[1], 0, up, 0);
-    for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(pts[i * 2], y, pts[i * 2 + 1], 0, up, 0), mb.v(pts[i * 2 + 2], y, pts[i * 2 + 3], 0, up, 0));
+  // a flat polygon triangulated by ear clipping (concave-safe, no fan spill) at height y;
+  // pts already in tile-local metres
+  const earMesh = (mb, pts, y) => {
+    const { xs, zs, tris } = earclip(pts);
+    for (let i = 0; i < xs.length; i++) mb.v(xs[i], y, zs[i], 0, 1, 0);
+    for (let i = 0; i < tris.length; i += 3) mb.tri(tris[i], tris[i + 1], tris[i + 2]);
   };
 
   // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming).
@@ -103,18 +107,27 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
         }
       } else if (L.kind === 3) {
         mW.mat = 0; mW.ea = 0; // fsWater's inland-water look (river, lake, canal, pond); the mesh is just positions
-        for (const r of L.recs) { const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100; fan(mW, pts, WATER, 1); nW++; }
+        // polygons (kinds 0-3) are closed rings → ear-clip at the water plane; lines (8-10) are open
+        // centrelines → ribbons at the doc's widths (river 55 m, stream 4 m, canal 15 m)
+        for (const r of L.recs) {
+          if (r.kind <= 3) {
+            const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
+            earMesh(mW, pts, WATER); nW++;
+          } else if (r.kind >= 8 && r.kind <= 10) {
+            ribbon(mW, r.pts, WW[r.kind] / 2, -th, -th, WATER); nW++;
+          } // kinds 4-7 (stale packs) and anything newer: skipped (forward-compatible)
+        }
       } else if (L.kind === 4) {
         mG.mat = M.GROUND; // ground() ignores tint; the polys sit on the shader's lawn, LANDMAP carries the park green
         for (const r of L.recs) {
           const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
-          fan(mG, pts, 0.03, 1); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
+          earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
         }
       } // kind 5 (terrain patches) and unknown kinds: skipped until terrain packs arrive
     }
     // buildings: one type per tint bucket; LODs run near → far (the cull pass switches up with distance),
     // so the facade carries slot 0, strips slot 1 and the plain prism slot 2. An empty LOD reuses its
-    // neighbour (identical geometry cross-fades harmlessly). Roofs: caps near, plain fan far.
+    // neighbour (identical geometry cross-fades harmlessly). Roofs: caps near, plain ear-clip top far.
     for (const w of city.walls.values()) {
       const f = w.f.build(), mM = w.m.ni ? w.m.build() : f, mN = w.n.build();
       put(type([mN, mM, f], K.SOLID, BLOD0, BLOD1, 1e9), tcx, 0, tcz, 1, Q0, w.t);

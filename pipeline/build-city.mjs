@@ -87,8 +87,9 @@ const WDEF = { 0: 30, 1: 24, 2: 18, 3: 14, 4: 11, 5: 8, 6: 6.5, 7: 5, 8: 4, 9: 2
 const SDEF = { 0: 110, 1: 90, 2: 60, 3: 50, 4: 50, 5: 40, 6: 40 };                          // class default speed, km/h
 const drivable = (cls) => cls <= 6; // service (7) and up render but do not route
 
-// water: polyline kinds (stream→4 is beyond the doc's 0..3 table by design, renderers may skip it)
-const WLINE = { river: 0, canal: 2, stream: 4 };
+// water: polyline (centreline) kinds — 8/9/10 live above the polygon table 0..3 so the renderer
+// can tell a river centreline from a riverbank polygon (docs/mpk-format.md)
+const WLINE = { river: 8, stream: 9, canal: 10 };
 const waterPolyKind = (t) => {
   const w = (t.water || '').toLowerCase();
   if (w === 'river') return 0;
@@ -173,6 +174,13 @@ function clipRing(pts) {
   }
   return out.length >= 6 ? [out] : [];
 }
+
+// the format stores CLOSED polygon rings (first == last, 1 cm tolerance): append the first point
+// when the Sutherland–Hodgman clip above left the ring open (it drops the closing duplicate)
+const closeRing = (pts) => {
+  const dx = pts[0] - pts[pts.length - 2], dz = pts[1] - pts[pts.length - 1];
+  return dx * dx + dz * dz > 1e-4 ? [...pts, pts[0], pts[1]] : pts;
+};
 
 // pack-local metres → tile-local Int32 cm, assigned by the record's first point
 const tiles = new Map(); // "tx,tz" → { tx, tz, b, r, w, g }
@@ -288,7 +296,7 @@ for (const el of waterEls) {
       const pts = ringPts(g);
       if (!pts || pts.length < 6) { stats.waterSkipped++; continue; }
       const rings = clipRing(pts);
-      for (const ring of rings) assign(ring, 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
+      for (const ring of rings) assign(closeRing(ring), 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
       stats.waterPoly += rings.length;
     } else if (WLINE[t.waterway] !== undefined) {
       const pts = linePts(g);
@@ -303,7 +311,7 @@ for (const el of waterEls) {
       if (!closedRing(m.geometry)) { stats.relOuterOpen++; continue; }
       const pts = ringPts(m.geometry);
       if (!pts || pts.length < 6) continue;
-      for (const ring of clipRing(pts)) assign(ring, 'w', { kind: waterPolyKind(t) });
+      for (const ring of clipRing(pts)) assign(closeRing(ring), 'w', { kind: waterPolyKind(t) });
       stats.waterPoly++;
     }
   }
@@ -318,7 +326,7 @@ for (const el of greenEls) {
   if (!pts || pts.length < 6) { stats.greenSkipped++; continue; }
   const kind = t.leisure === 'park' ? 0 : t.landuse === 'forest' ? 1 : (t.landuse === 'grass' || t.landuse === 'meadow') ? 2 : 3; // 0 park, 1 forest, 2 grass, 3 other
   const rings = clipRing(pts);
-  for (const ring of rings) assign(ring, 'g', { kind });
+  for (const ring of rings) assign(closeRing(ring), 'g', { kind });
   stats.greenRecs += rings.length;
 }
 

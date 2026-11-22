@@ -30,6 +30,106 @@ const qBasis = (x, y, z) => {
 const vnorm = (v) => { const l = hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
+// ear clipping: triangulate a simple polygon (flat [x,z,...] ring; open rings are closed
+// defensively, a duplicate closing point within 1 cm is dropped) with optional holes (array of
+// flat rings, e.g. courtyards / islands). Returns { xs, zs, tris } — the combined vertex pool
+// (outer first, then holes; bridge points appear in tris twice) and flat index triples into it.
+// Deterministic; load-time only, allocations fine. Coordinates are normalised to a unit box so
+// the epsilon tests work at any scale; wrong winding is normalised, degenerate rings yield no
+// triangles, triangles come out in both windings (MB.build() re-winds to match normals).
+const earclip = (ring, holes = []) => {
+  const xs = [], zs = [], tris = [];
+  // normalise to the unit box: cross products, epsilons and the ray cast all scale-invariant then
+  let mx = 0;
+  for (const pts of [ring, ...holes]) for (let i = 0; i < pts.length; i++) { const v = abs(pts[i]); if (v > mx) mx = v; }
+  if (mx === 0) return { xs, zs, tris };
+  const inv = 1 / mx, tol = 1e-4 * inv * inv; // tol: 1 cm² in the pack's metre frame, scaled
+  const out = () => { for (let i = 0; i < xs.length; i++) { xs[i] *= mx; zs[i] *= mx; } return { xs, zs, tris }; };
+  // push one ring into the vertex pool with a forced winding (outer CCW, holes CW); -1 if degenerate
+  const push = (pts, ccw) => {
+    let n = pts.length >> 1;
+    if (n >= 2) { const dx = (pts[0] - pts[pts.length - 2]) * inv, dz = (pts[1] - pts[pts.length - 1]) * inv; if (dx * dx + dz * dz < tol) n--; }
+    if (n < 3) return -1;
+    let a = 0;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; a += pts[i * 2] * pts[j * 2 + 1] - pts[j * 2] * pts[i * 2 + 1]; }
+    if ((a < 0) === ccw) { // wrong winding: store reversed
+      const base = xs.length;
+      for (let k = 0; k < n; k++) { xs.push(pts[(n - 1 - k) * 2] * inv); zs.push(pts[(n - 1 - k) * 2 + 1] * inv); }
+      return base;
+    }
+    const base = xs.length;
+    for (let k = 0; k < n; k++) { xs.push(pts[k * 2] * inv); zs.push(pts[k * 2 + 1] * inv); }
+    return base;
+  };
+  const ar2 = (i, j, k) => (xs[j] - xs[i]) * (zs[k] - zs[i]) - (xs[k] - xs[i]) * (zs[j] - zs[i]);
+  const ob = push(ring, true);
+  if (ob < 0) return out();
+  let poly = [];
+  for (let i = ob, e = xs.length; i < e; i++) poly.push(i);
+  // merge each hole with a bridge: rightmost hole vertex, ray +x, nearest crossing edge, closest
+  // reflex vertex inside that candidate triangle (Eberly, "Ear Clipping with Holes")
+  for (const h of holes) {
+    const hb = push(h, false);
+    if (hb < 0) continue;
+    const nh = xs.length - hb;
+    let hi = 0;
+    for (let k = 1; k < nh; k++) { const d = xs[hb + k] - xs[hb + hi]; if (d > 1e-9 || (abs(d) <= 1e-9 && zs[hb + k] > zs[hb + hi])) hi = k; }
+    const hv = hb + hi, px = xs[hv], pz = zs[hv];
+    let bj = -1, ix = 1e18; // edge endpoint above the ray closest to it
+    for (let k = 0; k < poly.length; k++) {
+      const a = poly[k], b = poly[(k + 1) % poly.length], az = zs[a], bz = zs[b];
+      if ((az > pz) === (bz > pz)) continue;
+      const x = xs[a] + (xs[b] - xs[a]) * (pz - az) / (bz - az);
+      if (x > px + 1e-9 && x < ix) { ix = x; bj = az > bz ? a : b; }
+    }
+    if (bj < 0) continue; // degenerate: triangulate the outer ring without this hole
+    // reflex vertices inside triangle (hv, (ix, pz), bj): the nearest to hv replaces the edge endpoint
+    let rv = -1;
+    for (let k = 0; k < poly.length; k++) {
+      const v = poly[k];
+      if (v === bj) continue;
+      const p = poly[(k + poly.length - 1) % poly.length], q = poly[(k + 1) % poly.length];
+      if (ar2(p, v, q) >= 1e-12) continue; // convex: not a candidate
+      const x = xs[v], z = zs[v];
+      const c1 = (ix - px) * (z - pz), c2 = (xs[bj] - ix) * (z - pz) - (zs[bj] - pz) * (x - ix), c3 = (px - xs[bj]) * (z - zs[bj]) - (pz - zs[bj]) * (x - xs[bj]);
+      if (c1 >= -1e-9 && c2 >= -1e-9 && c3 >= -1e-9 && (rv < 0 || x < xs[rv] || (x === xs[rv] && z < zs[rv]))) rv = v;
+    }
+    const target = rv >= 0 ? rv : bj;
+    const at = poly.indexOf(target);
+    if (at < 0) continue;
+    // zero-width corridor: target → hole loop → target, so the polygon area is untouched
+    const loop = [];
+    for (let k = 0; k <= nh; k++) loop.push(hb + (hi + k) % nh);
+    loop.push(target);
+    poly.splice(at + 1, 0, ...loop);
+  }
+  // clip ears: convex corner with no other vertex inside its triangle; splice keeps the ring alive
+  let guard = poly.length * poly.length + 16;
+  while (poly.length > 2 && guard-- > 0) {
+    const refl = new Set();
+    for (let i = 0; i < poly.length; i++) { const a = poly[(i + poly.length - 1) % poly.length], b = poly[i], c = poly[(i + 1) % poly.length]; if (ar2(a, b, c) <= 1e-12) refl.add(b); }
+    let clipped = false;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[(i + poly.length - 1) % poly.length], b = poly[i], c = poly[(i + 1) % poly.length];
+      if (ar2(a, b, c) <= 1e-12) continue;
+      let ok = true;
+      for (const p of refl) {
+        if (p === a || p === b || p === c) continue;
+        // inside or on the boundary blocks (a vertex on an ear edge would overlap after the clip)
+        if (ar2(a, b, p) >= -1e-12 && ar2(b, c, p) >= -1e-12 && ar2(c, a, p) >= -1e-12) { ok = false; break; }
+      }
+      if (ok) { tris.push(a, b, c); poly.splice(i, 1); clipped = true; break; }
+    }
+    if (!clipped) { // numeric fallback: clip the most convex corner so the loop always terminates
+      let bi = 0, ba = -1e18;
+      for (let i = 0; i < poly.length; i++) { const a = poly[(i + poly.length - 1) % poly.length], b = poly[i], c = poly[(i + 1) % poly.length], A = ar2(a, b, c); if (A > ba) { ba = A; bi = i; } }
+      const i = bi, a = poly[(i + poly.length - 1) % poly.length], b = poly[i], c = poly[(i + 1) % poly.length];
+      tris.push(a, b, c); poly.splice(i, 1);
+    }
+  }
+  return out();
+};
+
 // mesh builder
 // vertex, 20 bytes: position (3 floats), normal + baked occlusion (4 snorm8), material id + 3 params (4 unorm8).
 // build() winds triangles to match their vertex normals.

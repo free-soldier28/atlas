@@ -2,7 +2,7 @@
 // Instance tint is per mesh, so a tile's buildings split into a few wall meshes by colour bucket,
 // each with three LODs: plain prism beyond BLOD1 m, floor bands + window strips to BLOD0 m, and a
 // facade (bay frames, door, cornice, parapet) up close. Roofs are separate meshes with their own
-// tint (grey / red-brown): flat fan far, gable / hip caps near — caps switch with the facade, since
+// tint (grey / red-brown): flat ear-clip top far, gable / hip caps near — caps switch with the facade, since
 // capped walls stop at the eaves. Window panes are M.WINDOW quads carrying per-pane uv (ea / eb) and
 // a per-pane random (ec) from which the shader builds the room behind the glass (night lights those).
 // Everything seeds off h2(tile, building): identical output on every run.
@@ -73,10 +73,13 @@ const panes = (F, si, base, ground, upper, pitch, cb) => {
   for (let i = 0; i < cnt; i++) { const u0 = gap + i * (pw + gap); cb(u0, u0 + pw, sill, head, i); }
 };
 const ecOf = (iT, iB, fi, si, pi) => 1 + (h2(iT * 8 + 3, iB * 61 + fi * 17 + si * 5 + pi) * 254 | 0);
-// flat roof fan at y
-const roofFan = (mb, X, Z, n, y) => {
-  const i0 = mb.v(X[0], y, Z[0], 0, 1, 0);
-  for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(X[i], y, Z[i], 0, 1, 0), mb.v(X[i + 1], y, Z[i + 1], 0, 1, 0));
+// flat roof triangulated by ear clipping at y (concave footprints poke through walls with a fan)
+const roofTri = (mb, X, Z, n, y) => {
+  const pts = new Array(n * 2);
+  for (let i = 0; i < n; i++) { pts[i * 2] = X[i]; pts[i * 2 + 1] = Z[i]; }
+  const { xs, zs, tris } = earclip(pts);
+  for (let i = 0; i < xs.length; i++) mb.v(xs[i], y, zs[i], 0, 1, 0);
+  for (let i = 0; i < tris.length; i += 3) mb.tri(tris[i], tris[i + 1], tris[i + 2]);
 };
 // broken centre-line paint: 1.5 m marks every 4.5 m, one thin quad each (tile-local pts in cm)
 const cityDashes = (mb, pts, ox, oz) => {
@@ -141,11 +144,11 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
   const doorF = F2[0];
   const pitchN = BPITCH, pitchM = BPITCH_M;
 
-  // far: plain prism walls; roof fan
+  // far: plain prism walls; ear-clip roof top
   wb.f.mat = M.PLASTER;
   for (const f of F) wquad(wb.f, f, 0, f.L, base, top, 0, -1);
   rb.f.mat = M.ROCK;
-  roofFan(rb.f, X, Z, n, top);
+  roofTri(rb.f, X, Z, n, top);
 
   // mid: walls + floor bands (long walls) + window strips
   const m = wb.m; m.mat = M.PLASTER;
@@ -183,7 +186,7 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
     b.tri(b.v(p0[0], p0[1], p0[2], f.nx, 0, f.nz, 1), b.v(p1[0], p1[1], p1[2], f.nx, 0, f.nz, 1), b.v(ap[0], ap[1], ap[2], f.nx, 0, f.nz, 1));
   }
 
-  // roof near: caps over the footprint for gable / hip, fan for flat
+  // roof near: caps over the footprint for gable / hip, ear-clip top for flat
   if (roof) {
     rb.n.mat = M.ROCK;
     for (const f of F) {
@@ -204,7 +207,7 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes) {
         rb.n.tri(V(p0), V(p1), V(ap));
       }
     }
-  } else { rb.n.mat = M.ROCK; roofFan(rb.n, X, Z, n, top); }
+  } else { rb.n.mat = M.ROCK; roofTri(rb.n, X, Z, n, top); }
 }
 
 // a tile's buildings and road paint: buckets keyed by packed tint (deterministic mesh grouping).

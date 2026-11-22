@@ -68,3 +68,29 @@ test('grodno.mpk: every tile decodes, record shapes sane', async () => {
   console.log(`roundtrip: decoded ${P.h.tiles.length} tiles — buildings ${nB}, roads ${nR}, water ${nW}, green ${nG}`);
   assert.ok(nB > 30000 && nR > 30000, 'record counts far below the measured Overpass totals');
 });
+
+test('grodno.mpk: water polygons (kinds 0-3) and green rings arrive CLOSED, water lines are 8-10', async () => {
+  const P = await openPack();
+  // polygon records must end where they start (1 cm = 1 unit in the Int32 cm grid); the renderer
+  // triangulates them as simple polygons, so an open ring would spill. Lines (8-10) are centrelines
+  // widened into ribbons — they must NOT be closed (a closed centreline doubles the first segment).
+  const isClosed = (pts) => pts[0] === pts[pts.length - 2] && pts[1] === pts[pts.length - 1];
+  let polys = 0, openPolys = 0, lines = 0, closedLines = 0, green = 0, openGreen = 0;
+  const kinds = {};
+  for (const t of P.tiles.values()) for (const layers of t.lods) for (const layer of layers) {
+    if (layer.kind !== 3 && layer.kind !== 4) continue;
+    for (const r of layer.recs) {
+      const closed = isClosed(r.pts);
+      if (layer.kind === 4) { green++; if (!closed) openGreen++; continue; }
+      kinds[r.kind] = (kinds[r.kind] || 0) + 1;
+      if (r.kind <= 3) { polys++; assert.ok(closed, `water polygon kind ${r.kind} open — rings must arrive closed`); if (!closed) openPolys++; }
+      else if (r.kind <= 10) { lines++; assert.ok(r.kind >= 8, `water line kind ${r.kind} outside 8-10`); if (closed) closedLines++; }
+      else assert.fail(`unknown water kind ${r.kind}`);
+    }
+  }
+  console.log(`roundtrip: water polygons ${polys} (open ${openPolys}), lines ${lines} (closed ${closedLines}), green ${green} (open ${openGreen}) — kinds ${JSON.stringify(kinds)}`);
+  assert.equal(openPolys, 0, 'open water polygon rings');
+  assert.equal(closedLines, 0, 'closed water line records');
+  assert.equal(openGreen, 0, 'open green rings');
+  assert.ok(polys > 0 && lines > 0 && green > 0, 'no water/green content decoded');
+});
