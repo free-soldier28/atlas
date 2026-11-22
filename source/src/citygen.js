@@ -93,7 +93,7 @@ const cityDashes = (mb, pts, ox, oz) => {
   for (let i = 0; i + 3 < pts.length; i += 2) {
     const x0 = ox + pts[i] / 100, z0 = oz + pts[i + 1] / 100, x1 = ox + pts[i + 2] / 100, z1 = oz + pts[i + 3] / 100;
     const ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez); if (L < 8) continue;
-    const ux = ex / L, uz = ez / L, nx = uz * 0.14, nz = -ux * 0.14;
+    const ux = ex / L, uz = ez / L, nx = uz * 0.17, nz = -ux * 0.17;
     for (let t = 2.25; t + 1.5 <= L - 2.25; t += 4.5) {
       const ax = x0 + ux * t, az = z0 + uz * t, bx = x0 + ux * (t + 1.5), bz = z0 + uz * (t + 1.5);
       mb.quad(mb.v(ax - nx, 0.1, az - nz, 0, 1, 0), mb.v(ax + nx, 0.1, az + nz, 0, 1, 0), mb.v(bx + nx, 0.1, bz + nz, 0, 1, 0), mb.v(bx - nx, 0.1, bz - nz, 0, 1, 0));
@@ -291,7 +291,7 @@ function cityTile(iT, lods, ox, oz, S, bboxes, holes) {
       const r = L.recs[iB];
       cityBuilding(iT, iB, r, -h, -h, cx, cz, wallB, roofB, bboxes, holes && (r.src & 16) ? holes.get(r.osmId) : null);
     }
-    else if (L.kind === 2) for (const r of L.recs) if (r.cls <= 3) { if (!dash) dash = new MB(1 << 12); cityDashes(dash, r.pts, -h, -h); }
+    else if (L.kind === 2) for (const r of L.recs) if (r.cls <= 6) { if (!dash) dash = new MB(1 << 12); cityDashes(dash, r.pts, -h, -h); } // centre marks on every drivable class
   }
   return { walls, roofs, dash };
 }

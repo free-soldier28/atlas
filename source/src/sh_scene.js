@@ -1,6 +1,6 @@
 // shaders 2/4: instancing, GPU culling, materials (G-buffer) and shadow casters
 // material ids, shared by mesh generators and shaders
-const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17 };
+const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17, ASPHALT: 18 };
 
 // per view, a compute pass frustum-tests each instance, picks its LOD and appends it to that mesh's list, drawn with one
 // indirect draw per mesh
@@ -135,25 +135,25 @@ fn marble(p: vec3f, dx: vec3f, dy: vec3f, w: vec3f, off: vec3f) -> vec4f { // rg
 }
 // polished paving, 2 m modules: rings and radials near the centre, a grid further out; gold inlay lines
 fn pave(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f) -> Mt {
-  let r = length(p.xz); let th = atan2(p.z, p.x);
-  var jd: f32; var cell: vec2f;
-  if (r < 432.) {
-    let ri = floor(r / 2.); let nt = max(6., round(PI * (2. * ri + 1.))); let a = th / (2. * PI) * nt + .5 * (ri % 2.);
-    jd = min(min(fract(r / 2.), 1. - fract(r / 2.)) * 2., min(fract(a), 1. - fract(a)) * 2. * PI * r / nt); cell = vec2f(ri, floor(a));
-  } else { let g = p.xz / 2.; let f = min(fract(g), 1. - fract(g)) * 2.; jd = min(f.x, f.y); cell = floor(g); }
+  let cell = floor(p.xz / 2.); // 2 m flagstone grid (the Atlantis podium radials are gone)
+  let g = p.xz / 2.; let f = min(fract(g), 1. - fract(g)) * 2.; let jd = min(f.x, f.y);
   let hs = h22(cell + 3.);
   let w = triW(n); let m = marble(p, dx, dy, w, vec3f(hs.x, 0., hs.y) * 40.);
   var o: Mt; o.alb = vec3f(.79, .76, .705) * m.rgb * (.93 + .14 * hs.x); o.rough = .13 + .12 * m.a + .08 * hs.y; o.metal = 0.; o.trans = 0.;
   o.nb = triN(p, dx, dy, w, 2.3, false) * .035;
   o.alb = mix(o.alb, o.alb * vec3f(.56, .6, .68), gVein * .55); // polished slabs show grey veins clearly
   let j = line(jd, .005, fw); o.alb *= 1. - .5 * j; o.rough = mix(o.rough, .7, j);
-  // inlay: 12 radials and rings on the podium, lines along the six spokes
-  let a12 = (fract(th / (PI / 6.) + .5) - .5) * (PI / 6.); let a6 = (fract((th - PI * .5) / (PI / 3.) + .5) - .5) * (PI / 3.);
-  let lat = abs(r * sin(a6)); var il = 0.;
-  if (r < 58.5 && r > 40.5) { il = max(il, line(abs(r * sin(a12)), .07, fw)); il = max(il, line(min(min(abs(r - 43.), abs(r - 50.5)), abs(r - 56.5)), .09, fw)); }
-  if (r > 58.5 && r < 86.) { il = max(il, line(min(abs(r - 64.2), abs(r - 77.7)), .08, fw)); }
-  if (r > 60. && lat < 6.9 && cos(a6) > 0.) { il = max(il, line(min(abs(lat - 2.4), abs(lat - 5.6)), .055, fw)); if (abs(th - PI * .5) < .5) { il = max(il, line(lat, .09, fw)); } }
-  o.inlay = il; o.alb = mix(o.alb, vec3f(.95, .68, .25), il); o.metal = il * .45; o.rough = mix(o.rough, .34, il);
+  o.inlay = 0.; // the Atlantis podium's golden radials are gone: pack paving is roads and plazas
+  return o;
+}
+// asphalt: dark aggregate, lane-worn — drivable roads only (footways stay flagstone)
+fn asphalt(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f) -> Mt {
+  let w = triW(n);
+  let g = tri(tNoiseA, p, dx, dy, w, 2.1); let fine = tri(tNoiseA, p, dx, dy, w, 11.);
+  var o: Mt; o.metal = 0.; o.inlay = 0.; o.trans = 0.;
+  o.alb = vec3f(.105, .105, .112) * (.82 + .36 * g.r) * (.88 + .24 * fine.a);
+  o.rough = .62 + .1 * g.a;
+  o.nb = triN(p, dx, dy, w, .35, false) * .12;
   return o;
 }
 // city ground: paving where the map says, else lawn, beds and flagstone paths
@@ -277,6 +277,8 @@ fn terrain(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f, tv: vec3f) -> Mt {
       o.alb = mix(o.alb, vec3f(.07, .1, .03) * (.6 + .8 * B.a), moss * .85); o.rough = mix(o.rough, .7, moss);
       o.alb = mix(o.alb, vec3f(.2, .25, .19), ss(-.2, -2.5, d) * .6);
     }
+  } else if (mat == 18u) {
+    o = asphalt(p, dx, dy, fw, N);
   } else if (mat == 1u || mat == 14u) {
     o = pave(p, dx, dy, fw, N);
     if (mat == 14u) {

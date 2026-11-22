@@ -18,8 +18,8 @@ test('ribbon joints: the outer side of a bend is covered (no wedge gaps)', async
   B.tile(0, 0, [[{ kind: 2, recs: [{ cls: 2, flags: 0, name: '', lanes: 2, w10: 100, pts }] }]]);
   const P = E.mpkOpen(new Uint8Array(B.finish()));
   const W = await E.buildWorld(P);
-  // the road mesh: single-LOD solid with M.PAVE material (dashes are PLASTER, ground is GROUND)
-  const road = W.meshes.find((m) => new Uint8Array(m.vb)[16] === E.M.PAVE);
+  // the road mesh: single-LOD solid with M.ASPHALT material (drivable cls 2; footways stay PAVE)
+  const road = W.meshes.find((m) => new Uint8Array(m.vb)[16] === E.M.ASPHALT);
   assert.ok(road, 'road mesh exists');
   const vb = new Float32Array(road.vb);
   // instances sit at the tile centre; mesh verts are tile-centre-local → world = vert + instance

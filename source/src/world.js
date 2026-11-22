@@ -127,18 +127,22 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       for (const r of L.recs) { const a = holes.get(r.osmId); if (a) a.push(r); else holes.set(r.osmId, [r]); }
     }
     const city = cityTile(i, lods, ox, oz, S, bboxes, holes); // buildings into tint buckets + road centre lines
-    const mR = new MB(1 << 15), mW = new MB(1 << 12), mG = new MB(1 << 12);
+    const mR = new MB(1 << 15), mF = new MB(1 << 12), mW = new MB(1 << 12), mG = new MB(1 << 12);
     let nR = 0, nW = 0, nG = 0;
     for (const L of lods) {
-      if (L.kind === 2) {
-        mR.mat = M.PAVE;
-        for (const r of L.recs) {
-          const hw = (r.w10 || (CLSW[r.cls] || 8) * 10) / 20;
-          ribbon(mR, r.pts, hw, -th, -th);
-          for (let k = 0; k + 3 < r.pts.length; k += 2) paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
-          nR++;
-        }
-      } else if (L.kind === 3) {
+    if (L.kind === 2) {
+      // two surfaces: drivable roads (cls ≤ 7) in dark asphalt, footways/paths/steps (8-10) in
+      // flagstone — the class hierarchy the eye needs ("where is the road, where is the footpath")
+      mR.mat = M.ASPHALT;
+      for (const r of L.recs) {
+        const hw = (r.w10 || (CLSW[r.cls] || 8) * 10) / 20;
+        const mb = r.cls <= 7 ? mR : mF;
+        mb.mat = r.cls <= 7 ? M.ASPHALT : M.PAVE;
+        ribbon(mb, r.pts, hw, -th, -th);
+        for (let k = 0; k + 3 < r.pts.length; k += 2) paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
+        nR++;
+      }
+    } else if (L.kind === 3) {
         mW.mat = 0; mW.ea = 0; // fsWater's inland-water look (river, lake, canal, pond); the mesh is just positions
         // polygons (kinds 0-3) are closed rings → ear-clip at the water plane; lines (8-10) are open
         // centrelines → ribbons at the doc's widths (river 55 m, stream 4 m, canal 15 m)
@@ -172,6 +176,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     if (city.dash && city.dash.ni) put(type([city.dash.build()], K.SOLID, 1e9, 1e9, 380), tcx, 0, tcz, 1, Q0, rgb(1, 1, .96));
     // only register meshes that got geometry (degenerate records — e.g. a pack's zeroed road pts — make none)
     if (nR && mR.ni) put(type([mR.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    if (nR && mF.ni) put(type([mF.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
   }

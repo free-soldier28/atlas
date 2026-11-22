@@ -92,7 +92,8 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   const roadTris = new Map(); // tile key → flat [x, z, ...] triangle soup (world metres)
   W2.types.forEach((T, ti) => {
     if (T.lods.length !== 1 || T.kind !== E.K.SOLID) return;
-    if (new Uint8Array(W2.meshes[T.lods[0]].vb)[16] !== E.M.PAVE) return;
+    const mat = new Uint8Array(W2.meshes[T.lods[0]].vb)[16];
+    if (mat !== E.M.PAVE && mat !== E.M.ASPHALT) return; // drivable asphalt + footway flagstone both cover joints
     for (let i = 0; i < W2.nI; i++) {
       if (IU[i * 12 + 9] !== ti) continue;
       const ix = IF[i * 12], iz = IF[i * 12 + 2], m = W2.meshes[T.lods[0]], vb = new Float32Array(m.vb);
