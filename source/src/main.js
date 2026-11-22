@@ -456,7 +456,7 @@ addEventListener('resize', resize);
 // preallocated. The first switch to a profile bakes its shadow maps once with that profile's sun (frames idle for
 // it, about a second on High); after that switching is instant.
 let rebake = false; // a shadow bake is running: frame() idles (UB[V_SH] and the map contents are being rewritten)
-let dnB = null; // the menu's Day/Night buttons (wired in the menu section below)
+let dnB = null; // the drawer's Day/Night buttons (wired in the UI section below)
 const setNight = async (n) => {
   n = n ? 1 : 0; if (n === night) return;
   night = n;
@@ -476,6 +476,7 @@ const setNight = async (n) => {
   F[RESET] = 1; // the TAA history is from the other profile
   if (!AUTO) { try { localStorage.atlasNight = n ? '1' : '0'; } catch {} }
   if (dnB) { dnB[0].className = n ? '' : 'on'; dnB[1].className = n ? 'on' : ''; }
+  const nt = $('nt'); if (nt) { nt.textContent = n ? '☀' : '🌙'; nt.title = n ? 'Day (N)' : 'Night (N)'; } // the stack glyph mirrors the profile
   if (AUTO) console.log(`profile: ${n ? 'night' : 'day'} · sun ${ACTIVE_SUN.map((v) => v.toFixed(2))} · sunc ${(n ? SUNCN : SUNC).map((v) => v.toFixed(3))} · expo ${n ? EXPO_N : EXPO}`);
 };
 window.__night = (n) => setNight(n === undefined ? 1 - night : n); // headless tests / console
@@ -590,7 +591,7 @@ function render() {
 }
 
 const render0 = render; // dev.js wraps `render`
-let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, menu = true;
+let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, menu = false; // menu: input suppressed while the drawer is open (dev.js also sets it)
 let solid = !QP.has('noclip'); // key C
 let tId = -1, tN = 0, tx = 0, ty = 0, tx0 = 0, ty0 = 0; // touch: steering finger id, fingers down, its position and where it went down
 // flying speed: wheel scales it ~15% a step (0.25-50 m/s, Shift x8 too); middle button resets to 12.5 m/s
@@ -598,7 +599,7 @@ let spd = clamp(+QP.get('spd') || 1, 0.02, 4);
 addEventListener('wheel', (e) => { if (!menu) spd = clamp(spd * exp(-(e.deltaMode ? e.deltaY * 33 : e.deltaY) * 0.0014), 0.02, 4); }, { passive: true });
 addEventListener('mousedown', (e) => { if (!menu && e.button === 1) { e.preventDefault(); spd = 1; } });
 const FPS = +QP.get('fps') || 0; // optional fps cap (development)
-// dynamic resolution, decided every second (0.4 s behind the menu). Nothing runs or allocates on a machine that
+// dynamic resolution, decided every second (0.4 s while the drawer is open). Nothing runs or allocates on a machine that
 // keeps up at full resolution.
 function tune() {
   const top = min(PIXTOP, DW * DH), was = pix > top ? top : pix;
@@ -659,21 +660,78 @@ function frame(now) {
   }
 }
 
-// input and menu
+// input and UI: the scene is live from the start; the settings drawer is the only chrome
 const key = (e, v) => {
   switch (e.code) {
     case 'KeyW': kf = v; break; case 'KeyS': kb = v; break; case 'KeyA': kl = v; break; case 'KeyD': kr = v; break;
     case 'KeyE': ku = v; break; case 'KeyQ': kd = v; break; case 'ShiftLeft': case 'ShiftRight': ks = v; break;
     default: if (v && !e.repeat) {
-      if (e.code === 'KeyH') { hud = !hud; tsOn = hud && hasTS; info.textContent = ''; }
-      else if (e.code === 'KeyC') solid = !solid;
+      if (e.code === 'KeyH') setHud(!hud);
+      else if (e.code === 'KeyC') { solid = !solid; colUI(); }
       else if (e.code === 'KeyG') gpsToggle();
       else if (e.code === 'KeyN') setNight(1 - night);
       else if (e.code >= 'Digit1' && e.code <= 'Digit6') { const p = POSES[e.code.charCodeAt(5) - 49]; if (p) { lookAt(...p); F[VX] = F[VY] = F[VZ] = 0; } }
     }
   }
 };
-addEventListener('keydown', (e) => { if (!menu || e.code === 'KeyH') key(e, 1); });
+
+// stats toggle, from the H key, the 📊 stack button and the drawer row
+const setHud = (v) => { hud = v; tsOn = hud && hasTS; info.textContent = ''; const b = $('hs'); if (b) b.className = v ? 'on' : ''; const r = $('hb'); if (r) { r.textContent = v ? 'On' : 'Off'; r.className = v ? 'on' : ''; } };
+// collision toggle, from the C key and the drawer row
+const colUI = () => { const r = $('cb'); if (r) { r.textContent = solid ? 'On' : 'Off'; r.className = solid ? 'on' : ''; } };
+
+// the settings drawer: Esc or ⚙ toggles, a click outside closes it; the scene keeps running behind it
+let open = false;
+const setDrawer = (o) => {
+  if (dead || body.classList.contains('l')) return; // nothing to open during loading or after a failure
+  if (o === open) { $('w').classList.toggle('open', o); return; }
+  open = o; menu = o; if (o) release();
+  $('w').classList.toggle('open', o);
+  $('st').className = o ? 'on' : '';
+  body.className = o ? 'w' : document.pointerLockElement ? 'p' : '';
+};
+window.__drawer = (o) => setDrawer(o === undefined ? !open : !!o); // headless tests
+$('st').onclick = () => setDrawer(!open);
+$('hs').onclick = () => setHud(!hud);
+$('hb').onclick = () => setHud(!hud);
+$('cb').onclick = () => { solid = !solid; colUI(); };
+$('nt').onclick = () => setNight(1 - night);
+$('lc').onclick = () => locate();
+$('ct').onclick = () => { setDrawer(true); const ci = $('ci'); if (!ci.hidden) ci.scrollIntoView({ block: 'nearest' }); };
+
+// geolocation: one fix with a 4 s budget — the start camera and the locate button share it
+let geoWhy = 'no fix'; // why the last request produced nothing (for the decision log)
+const geoFix = () => new Promise((res) => {
+  if (!navigator.geolocation) { geoWhy = 'no geolocation'; return res(null); }
+  navigator.geolocation.getCurrentPosition((p) => res(p.coords), (e) => {
+    geoWhy = e.code === 1 ? 'geolocation denied' : e.code === 3 ? 'geolocation timeout' : 'geolocation unavailable';
+    res(null);
+  }, { timeout: 4000, enableHighAccuracy: true, maximumAge: 30000 });
+});
+// far outside the pack's bounding box (> 3 km past an edge): the fix is useless for framing the city
+const outside = (lat, lon) => {
+  const b = PK.h.bbox; if (!b) return false;
+  const [lat0, lon0] = PK.h.origin, k = cos(lat0 * DEG) * 111320;
+  const dLat = lat < b[0] ? b[0] - lat : lat > b[2] ? lat - b[2] : 0, dLon = lon < b[1] ? b[1] - lon : lon > b[3] ? lon - b[3] : 0;
+  return max(dLat * 111320, dLon * k) > 3000;
+};
+// camera above the point, tilted towards the city centre so the city reads around the user's spot
+const camOver = (lat, lon, label) => {
+  const g = geodeticToLocal(lat, lon), x = g[0], z = g[1];
+  lookAt(x, 350, z, x / 2, 0, z / 2);
+  F[VX] = F[VY] = F[VZ] = 0;
+  if (QP.has('log')) console.log(`${label}: gps ${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+};
+const locate = async () => {
+  const c = await geoFix();
+  if (!c || outside(c.latitude, c.longitude)) { if (QP.has('log')) console.log('locate: no usable fix'); return; }
+  camOver(c.latitude, c.longitude, 'locate');
+};
+
+addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && !e.repeat) { setDrawer(!open); return; } // captured input never gets here: the browser spends Esc on leaving the lock
+  if (!menu || e.code === 'KeyH') key(e, 1);
+});
 addEventListener('keyup', (e) => key(e, 0));
 const release = () => { kf = kb = kl = kr = ku = kd = ks = 0; tId = -1; tN = 0; };
 addEventListener('blur', release);
@@ -683,7 +741,8 @@ addEventListener('mousemove', (e) => { if (document.pointerLockElement === canva
 // (template.html), so the touch axes turn too.
 const rot = matchMedia('(orientation:portrait) and (pointer:coarse)');
 const touch = (e) => {
-  e.preventDefault(); if (menu) return; tN = e.touches.length;
+  e.preventDefault(); if (open) { setDrawer(false); return; } // a tap on the scene closes the drawer
+  tN = e.touches.length;
   let f = null, first = false; for (let i = 0; i < tN; i++) if (e.touches[i].identifier === tId) f = e.touches[i];
   if (!f) { tId = -1; if (tN) { f = e.touches[0]; tId = f.identifier; first = true; } }
   if (f) {
@@ -694,27 +753,36 @@ const touch = (e) => {
 };
 for (const n of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) canvas.addEventListener(n, touch, { passive: false });
 
-// the scene keeps rendering, blurred, behind the menu
-const ui = (m) => { if (dead) return; menu = m; body.className = m ? 'm' : document.pointerLockElement ? 'g p' : 'g'; if (m) release(); };
-$('d').onclick = () => {
-  ui(false); $('d').textContent = 'Resume';
-  // phones: full screen and landscape; if refused the style sheet still rotates the page
-  if (mob) document.documentElement.requestFullscreen?.()?.then(() => screen.orientation.lock('landscape')).catch(() => 0); else capture();
-};
-$('o').onclick = () => ui(true);
-canvas.addEventListener('click', capture);
-document.addEventListener('pointerlockchange', () => { if (!mob) ui(!document.pointerLockElement); });
+// first click or drag on the scene captures the mouse; losing the lock (Esc) opens the drawer
+canvas.addEventListener('click', () => { if (open) setDrawer(false); else capture(); });
+document.addEventListener('pointerlockchange', () => {
+  if (mob) return;
+  if (document.pointerLockElement) { if (!open) body.className = 'p'; }
+  else setDrawer(true);
+});
 // detail buttons: the current level is lit, the others reload with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { try { localStorage.atlas = 2 - i; } catch {} location.href = location.href.replace(/[?&]lv=\d/, ''); }; });
 // light profile row: the active one lit, clicks toggle like key N
 dnB = $('dn').querySelectorAll('button');
 dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
 dnB[night ? 1 : 0].className = 'on';
-$('gb').onclick = gpsToggle; // the menu's GPS button toggles like the key
+const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night ? 'Day (N)' : 'Night (N)'; // the stack glyph mirrors the profile
+$('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
+colUI();
 
+// start camera: above the user's position when geolocation answers within its 4 s budget (a fix far outside
+// the pack counts as no fix), else the pack's first viewpoint. Placement only — no follow camera, no marker.
+const fix = await geoFix();
+if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
+else {
+  lookAt(...POSES[0]);
+  F[VX] = F[VY] = F[VZ] = 0;
+  if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);
+}
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing
-lookAt(...POSES[min(4, POSES.length - 1)]); // the scene opens on the last viewpoint the pack offers (5th by default)
 await say('Letting the light in…', 1);
 render(); await Q.onSubmittedWorkDone();
 setTimeout(() => { keep('atlasLoad', ''); keep('atlasLost', ''); }, 15e3); // the load counts as survived after 15 s
-if (!AUTO) { ui(true); requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); }); } else { body.className = 'g'; window.__ready = true; if (QP.get('gps') === 'sim') gpsAuto(); }
+body.className = ''; // live at once: the loading plate fades itself out, no gate in between
+if (!AUTO) requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); });
+else { window.__ready = true; if (QP.get('gps') === 'sim') gpsAuto(); }

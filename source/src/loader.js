@@ -2,6 +2,8 @@
 // v0: one pack, embedded (base64, build.mjs --pack=) or fetched. AGENT-STREAM replaces
 // the source with tile-wise range reads and adds LRU/unload; callers use loadPack()/disposeWorld().
 
+const ENGINE = 'atlas 0.1'; // engine version, shown in the drawer footer
+
 // city choice: ?city= wins, else the stored one, else the sample pack
 let CITY = 'sample';
 try { CITY = QP.get('city') || localStorage.atlasCity || CITY; } catch {}
@@ -14,14 +16,20 @@ async function loadPack(url = PACK_URL) {
   // city menu: the manifest is optional (absent on file:// where fetch cannot read it)
   try { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } } catch {}
   const m = CITIES && CITIES.cities.find((c) => c.id === CITY), u = m ? m.url : url;
+  // an embedded pack serves file:// and offline opens (no manifest to choose from); a city picked
+  // in the drawer or ?city= overrides it, so the switcher actually switches
   let u8;
-  if (EMBEDDED_PACK) u8 = Uint8Array.from(atob(EMBEDDED_PACK), (c) => c.charCodeAt(0));
+  if (EMBEDDED_PACK && !m) u8 = Uint8Array.from(atob(EMBEDDED_PACK), (c) => c.charCodeAt(0));
   else {
     const r = await fetch(u);
-    if (!r.ok) fail(`city pack ${u}: HTTP ${r.status}${CITY !== 'sample' ? ' (menu, City: Sample)' : ''}`);
+    if (!r.ok) fail(`city pack ${u}: HTTP ${r.status}${CITY !== 'sample' ? ' (drawer, City: Sample)' : ''}`);
     u8 = new Uint8Array(await r.arrayBuffer());
   }
   PK = mpkOpen(u8);
+  // the loading plate and the drawer footer say what the pack says about itself
+  const cn = $('cn'); if (cn) cn.textContent = PK.h.name || '';
+  const at = $('at'); if (at && PK.h.attribution) at.textContent = PK.h.attribution;
+  const pv = $('pv'); if (pv) pv.textContent = `${PK.h.name || ''} · ${PK.h.attribution || ''} · ${ENGINE}`;
   return PK;
 }
 
