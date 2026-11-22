@@ -4,6 +4,16 @@
 
 The engine is small (~100 KB); the places live in **map packs** (`packs/*.mpk`) generated from OpenStreetMap. The first city is **Grodno, Belarus**. The format is tile-based and scale-free: the same layout serves a city pack (full detail) and a country pack (coarse, streamed by range requests), so the map grows city by city and country by country without engine changes.
 
+## Why packs
+
+The engine ships with **no places inside**. A city, a country, a whole route network — all of it lives in pack files, and the renderer just walks their tiles. That split buys concrete things:
+
+- **New places without code changes.** Adding Minsk or Vilnius = building one pack + one line in the manifest. Nothing in the engine knows what a "city" is; it reads footprints, roads, water and a graph.
+- **One format, every scale.** A tile is a plain 512×512 m square of quantized geometry. A city pack is dense tiles with full detail; a country pack is sparse tiles with coarse content — streamed as the camera moves. The overview map (a whole route across countries) and the street view (one intersection) are the same data at different zooms.
+- **Navigation rides on the render data.** The road graph (junctions, lengths, classes, oneway, speeds) ships inside the pack the renderer already loads — routing reads what you see, with no second source of truth to sync.
+- **Still one file, still offline.** The build can embed a pack into `index.html` (base64), so the whole city travels as a single HTML file that opens with no server, no keys, no network.
+- **Versioned and attributed.** Every pack carries its format version, source attribution (© OpenStreetMap contributors) and bounding box in the header — packs stay forward-compatible as the engine grows.
+
 ![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)
 
 ## Run it
