@@ -76,7 +76,10 @@ const W_FX2 = /*wgsl*/`
   let zs = viewZ(suv); let zw = 1. / i.clip.w; let thick0 = max(zs - zw, 0.); // fragment w is 1 / view depth
   var uv2 = suv + N.xz * vec2f(1., -1.) * .035 * sat(thick0 * .6) / (1. + dist * .02);
   var z2 = viewZ(uv2); if (z2 < zw) { uv2 = suv; z2 = zs; }
-  let bed = worldAt(uv2, z2); let path = max(z2 - zw, 0.) * dist / zw; let depth = max(p.y - bed.y, 0.);
+  let bed = worldAt(uv2, z2); let path = max(z2 - zw, 0.) * dist / zw; var depth = max(p.y - bed.y, 0.);
+  // inland bodies sit on the flat pack ground (the lawn plane): their real depth reads ~0, so the
+  // bed would show through as a teal stain on grass. Rivers and ponds get a body depth instead.
+  if (kind == 0u) { depth = max(depth, 6.); }
   var under = textureSampleLevel(tScene, sLin, uv2, 0.).rgb; var sig: vec3f; var scat: vec3f; var sA = .2;
   // ambient in the body: night keeps the water black glass (the sky table is dim, but the moon's share is cut too)
   let amb = (skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12) * mix(1., .35, view.night.x);

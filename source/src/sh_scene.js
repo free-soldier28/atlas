@@ -165,12 +165,15 @@ fn ground(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f) -> Mt {
   if (mp.r + edge * .3 > .5) { return pave(p, dx, dy, fw, n); }
   var o: Mt; o.metal = 0.; o.inlay = 0.; o.trans = 0.;
   let C = tri(tNoiseA, p, dx, dy, w, .06);
-  o.alb = mix(vec3f(.07, .115, .035), vec3f(.15, .18, .06), ss(.3, .7, C.r + (A.g - .3) * .4)) * (.7 + .6 * B.a) * (.85 + .3 * A.a); o.rough = .85;
-  o.nb = triN(p, dx, dy, w, 1.4, true) * .5;
+  // lawn: one broad tint plus a single grain factor — the old double product (blob × grain × grain)
+  // veined like wet marble from above ("grass like water")
+  o.alb = mix(vec3f(.075, .12, .04), vec3f(.13, .165, .05), ss(.3, .7, C.r)) * (.82 + .36 * B.a); o.rough = .9;
+  o.nb = triN(p, dx, dy, w, 1.4, true) * .15;
   // planting beds: dark soil
   let bed = ss(.42, .58, mp.g + edge); o.alb = mix(o.alb, mix(vec3f(.15, .11, .075), vec3f(.07, .11, .04), ss(.4, .6, A.r)) * (.6 + .8 * B.a), bed);
-  // paths: pale flagstones, grass in the gaps
-  let path = ss(.3, .7, mp.b + edge * 1.1);
+  // paths: pale flagstones, grass in the gaps — only where the map says (the noise edge term used
+  // to hallucinate flagstone ridges across open lawn: bright winding filaments, "grass like water")
+  let path = ss(.3, .7, mp.b);
   if (path > 0.) {
     let cl = tri(tNoiseA, p, dx, dy, w, .9).g; let st = ss(.035, .09, cl) ; let m = marble(p, dx, dy, w, vec3f(0.));
     let stone = vec3f(.7, .66, .58) * m.rgb * (.85 + .3 * A.r);
