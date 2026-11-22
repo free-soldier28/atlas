@@ -36,7 +36,7 @@ const cp = spawn(CHROME, [`--remote-debugging-port=${port}`, '--headless=new', '
 
 let ws = null, nid = 0;
 const pend = new Map();
-let logs = [], exceptions = 0;
+let logs = [], errs = [], exceptions = 0;
 const send = (method, params = {}) => new Promise((res, rej) => {
   const id = ++nid;
   pend.set(id, { res, rej });
@@ -45,7 +45,12 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 const onMsg = (e) => {
   const m = JSON.parse(typeof e.data === 'string' ? e.data : e.data.toString());
   if (pend.has(m.id)) { const p = pend.get(m.id); pend.delete(m.id); m.error ? p.rej(new Error(m.error.message)) : p.res(m); return; }
-  if (m.method === 'Runtime.consoleAPICalled') logs.push(m.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
+  if (m.method === 'Runtime.consoleAPICalled') {
+    const text = m.params.args.map((a) => a.value ?? a.description ?? '').join(' ');
+    logs.push(text);
+    // WGSL compile errors surface here through the engine's mod() logger — a hard gate below
+    if (m.params.type === 'error') errs.push(text);
+  }
   if (m.method === 'Runtime.exceptionThrown') { exceptions++; console.log('EXC', m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text); }
 };
 
@@ -80,7 +85,7 @@ const shot = async (file) => {
   throw new Error(`screenshot ${file} failed`);
 };
 const nav = async (url, grant) => {
-  logs = []; exceptions = 0;
+  logs = []; errs = []; exceptions = 0;
   await send('Page.navigate', { url });
   await sleep(300);
   if (grant) await send('Browser.grantPermissions', { permissions: ['geolocation'], origin: BASE }).catch(() => {});
@@ -99,6 +104,7 @@ const a = JSON.parse(await evalJs(state) || '{}');
 check('A ready:true err:null', readyA && a.ready && !a.err, JSON.stringify(a));
 check('A no menu remnants', Array.isArray(a.gone) && a.gone.length === 0, `still present: ${a.gone}`);
 check('A stack(5)/drawer/plate', a.stack === 5 && a.drawer && a.plate);
+check('A zero console.error', errs.length === 0, errs.slice(0, 3).join(' | '));
 const camA = logs.find((l) => l.includes('start camera'));
 console.log('A start camera:', camA || '(none)');
 check('A fallback logged', !!camA && camA.includes('centre'), camA);
@@ -113,6 +119,7 @@ const camB = logs.find((l) => l.includes('start camera'));
 console.log('B start camera:', camB || '(none)');
 check('B ready (grodno pack)', readyB);
 check('B start camera uses override', /start camera: gps 53\.669, 23\.830/.test(camB || ''), camB);
+check('B zero console.error', errs.length === 0, errs.slice(0, 3).join(' | '));
 
 // C: night + simulator path still works, drawer glyph mirrors night
 await nav(`${BASE}/index.html?auto&log&gps=sim&night=1`, true);
@@ -123,6 +130,7 @@ const driveC = await until(`(document.getElementById('drive').textContent || '')
 check('C ready + night profile', readyC && nightC, `ready ${readyC}, night bake log ${nightC}`);
 check('C night glyph on stack button', ntC === '☀', JSON.stringify(ntC));
 check('C gps sim driving', driveC, await evalJs(`document.getElementById('drive').textContent`));
+check('C zero console.error', errs.length === 0, errs.slice(0, 3).join(' | '));
 
 // D: the human path — loading plate, live scene, drawer open/close, screenshots
 await nav(`${BASE}/index.html?city=grodno&log`, true);
@@ -150,14 +158,33 @@ await shot('ui-drawer.png');
 await evalJs(`window.__drawer(false)`);
 const closed = await until(`!document.getElementById('w').classList.contains('open')`, 5000, 'drawer closed');
 check('D drawer closes', closed);
+check('D zero console.error', errs.length === 0, errs.slice(0, 3).join(' | '));
 console.log('D start camera:', logs.find((l) => l.includes('start camera')) || '(none)');
 
-// E: dev.html tooling — __count reads the cull pass's indirect args for both views (trimmed: main + shadow)
-await nav(`${BASE}/dev.html?auto&log`);
-const readyE = await until('window.__ready === true', 120000, '__ready (dev)');
+// E: dev.html tooling — __count reads the cull pass's indirect args for both views (trimmed: main + shadow).
+// Against the real city (city=grodno): pose budgets catch culling collapse (baselines: street 0.37M,
+// aerial 0.09M, shadow ~0.10M — generous 3-4x headroom).
+await nav(`${BASE}/dev.html?auto&log&city=grodno`);
+const readyE = await until('window.__ready === true', 150000, '__ready (dev, grodno)');
 const cntE = readyE ? await evalAsync(`window.__count()`) : null;
 check('E dev ready', readyE);
 check('E dev __count rows', !!cntE && /main: /.test(cntE) && /shadow: /.test(cntE) && !/mirror|crystal|cascade|undefined/.test(cntE), JSON.stringify(cntE));
+const tris = (s, view) => { const m = new RegExp(`${view}: ([0-9.]+) M tris`).exec(s || ''); return m ? +m[1] : NaN; };
+const streetMain = tris(cntE, 'main'), streetShadow = tris(cntE, 'shadow'); // start camera = POSES[0], the street pose
+check('E street main ≤ 1.5M tris (start camera = pose 1)', Number.isFinite(streetMain) && streetMain <= 1.5, `${streetMain} M (baseline 0.37M)`);
+check('E street shadow ≤ 1M tris', Number.isFinite(streetShadow) && streetShadow <= 1, `${streetShadow} M (baseline ~0.10M)`);
+// ?auto starts no rAF loop of its own — reach the aerial pose through dev.js's __shot, which draws frames itself
+let cntAerial = null;
+if (readyE) {
+  await evalAsync(`window.__shot({ pose: 4, frames: 6, dt: 1 / 60, crop: [0, 0, 1, 1] })`);
+  cntAerial = await evalAsync(`window.__count()`);
+}
+const aerialMain = tris(cntAerial, 'main'), aerialShadow = tris(cntAerial, 'shadow');
+check('E aerial pose drew a fresh frame', Number.isFinite(aerialMain) && Math.abs(aerialMain - streetMain) > 0.005, `__count stayed at ${streetMain} M`);
+check('E aerial main ≤ 0.3M tris', Number.isFinite(aerialMain) && aerialMain <= 0.3, `${aerialMain} M (baseline 0.09M)`);
+check('E aerial shadow ≤ 1M tris', Number.isFinite(aerialShadow) && aerialShadow <= 1, `${aerialShadow} M`);
+console.log(`E counts: street ${streetMain}M main / ${streetShadow}M shadow · aerial ${aerialMain}M main / ${aerialShadow}M shadow`);
+check('E zero console.error', errs.length === 0, errs.slice(0, 3).join(' | '));
 
 cp.kill();
 try { rmSync(dir, { recursive: true, force: true }); } catch {}
