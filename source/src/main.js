@@ -43,11 +43,11 @@ const fsPipe = (m, lay, format, entry = 'fs', blend) => device.createRenderPipel
 const sRep = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: QL(8, 4, 1) });
 const sLin = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: QL(4, 2, 1) }); // anisotropic for the leaf atlas
 const sCmp = device.createSampler({ compare: 'less-equal', magFilter: 'linear', minFilter: 'linear' });
-const lBlit = layout('ts', SS.FRAGMENT), mBlit = mod(W_BLIT, 'blit');
+const lBlit = layout('ts', SS.FRAGMENT), mBlit = mod(W_BLIT(0), 'blit'), mBlitN = mod(W_BLIT(2.5), 'blitN'); // night: bloom threshold
 const ADD = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } };
-const blitPipe = (entry, format, blend) => fsPipe(mBlit, lBlit, format, entry, blend);
+const blitPipe = (entry, format, blend, m = mBlit) => fsPipe(m, lBlit, format, entry, blend);
 const pMip = { rgba8unorm: blitPipe('fsMip', 'rgba8unorm'), [HDR]: blitPipe('fsMip', HDR), r16float: blitPipe('fsMip', 'r16float') };
-const pDown0 = blitPipe('fsDown0', HDR), pDown = blitPipe('fsDown', HDR), pUp = blitPipe('fsUp', HDR, ADD);
+const pDown0 = blitPipe('fsDown0', HDR), pDown0N = blitPipe('fsDown0', HDR, undefined, mBlitN), pDown = blitPipe('fsDown', HDR), pUp = blitPipe('fsUp', HDR, ADD);
 const blitBG = (view) => group(lBlit, [view, sLin]);
 const mipView = (t, m) => t.createView({ baseMipLevel: m, mipLevelCount: 1 });
 const genMips = (e, t) => { for (let i = 1; i < t.mipLevelCount; i++) { const r = e.beginRenderPass({ colorAttachments: [colorAtt(mipView(t, i), true)] }); r.setPipeline(pMip[t.format]); r.setBindGroup(0, blitBG(mipView(t, i - 1))); r.draw(3); r.end(); } };
@@ -74,12 +74,20 @@ const waterBG = [0, 1, 2, 3, 4].map((m) => blitBG(mipView(tWater, m)));
 // main, mirror and shadow views each have a uniform block (struct View in sh_base.js)
 const NU = 216, V_MAIN = 0, V_MIR = 1, V_SH = 2;
 const UB = [0, 1, 2].map(() => new Float32Array(NU)), ubo = UB.map(() => device.createBuffer({ size: NU * 4, usage: BU.UNIFORM | BU.COPY_DST }));
-const O_SM = 48, O_CAM = 112, O_RES = 116, O_JIT = 120, O_SUN = 124, O_SUNC = 128, O_RIGHT = 132, O_UP = 136, O_FWD = 140, O_PL = 144, O_PULSE = 168, O_MISC = 172, O_LODC = 176, O_LODB = 180;
-const TANH = tan(30 * DEG), NEAR = 0.3, EXPO = 0.8;
-// sun at the ground: atmospheric transmittance x 1.35 (keeps sunlit paving warm rather than grey)
-const AT = atmo(), SUNC = AT.Ts.map((t) => t * E0 * 1.35);
-if (AUTO) console.log('sun at ground ' + SUNC.map((v) => v.toFixed(2)) + ' · psi ' + AT.PSI.map((v) => v.toFixed(4)));
-for (const U of UB) { U.set(SUN, O_SUN); U.set(SUNC, O_SUNC); U[O_SUNC + 3] = EXPO; U[O_MISC + 2] = 1; U[O_LODC + 3] = 1; }
+const O_SM = 48, O_CAM = 112, O_RES = 116, O_JIT = 120, O_SUN = 124, O_SUNC = 128, O_RIGHT = 132, O_UP = 136, O_FWD = 140, O_PL = 144, O_PULSE = 168, O_MISC = 172, O_LODC = 176, O_LODB = 180, O_NIGHT = 184;
+const TANH = tan(30 * DEG), NEAR = 0.3, EXPO = 0.8, EXPO_N = 0.55;
+// light profile: 0 golden-hour day, 1 night. ?night=1|0 forces one (headless tests); else the stored choice, day default
+let night = 0;
+try { const nq = QP.get('night'); night = nq !== null ? +(nq === '1') : AUTO ? 0 : +(localStorage.atlasNight === '1'); } catch {}
+// sun at the ground: atmospheric transmittance x 1.35 (keeps sunlit paving warm rather than grey); night: the moon.
+// Strict physics (the task brief's 1/4e4) renders black under AgX at the night exposure, so the moon carries
+// ~1/200 of the sun (MOONGROUND) and the night sky table is lifted to a visible dark blue (MOONSKY) — art-directed.
+const AT = atmo(SUN), SUNC = AT.Ts.map((t) => t * E0 * 1.35);
+const ATN = atmo(NIGHT_SUN), SUNCN = ATN.Ts.map((t, c) => t * E0 * MOONGROUND * MOONTINT[c]);
+if (AUTO) console.log('sun at ground ' + SUNC.map((v) => v.toFixed(2)) + ' · psi ' + AT.PSI.map((v) => v.toFixed(4)) + ' · moon ' + SUNCN.map((v) => v.toFixed(3)));
+// per view, the light profile's sun, sun colour, exposure and night flag (one writer, so the toggle is one call)
+const setViewSun = (U, n) => { U.set(n ? NIGHT_SUN : SUN, O_SUN); U.set(n ? SUNCN : SUNC, O_SUNC); U[O_SUNC + 3] = n ? EXPO_N : EXPO; U[O_NIGHT] = n; };
+for (const U of UB) { setViewSun(U, night); U[O_MISC + 2] = 1; U[O_LODC + 3] = 1; }
 // camera matrices and frustum planes for a view at (cx, cy, cz), yaw / pitch
 function setCam(U, cx, cy, cz, yaw, pitch, W, H, jx, jy) {
   const cp = cos(pitch), fy = sin(pitch), rx = cos(yaw), rz = sin(yaw), fx = cp * rz, fz = -cp * rx;
@@ -102,14 +110,17 @@ function setCam(U, cx, cy, cz, yaw, pitch, W, H, jx, jy) {
 }
 function plane(U, k, nx, ny, nz, px, py, pz, w) { const o = O_PL + k * 4; U[o] = nx; U[o + 1] = ny; U[o + 2] = nz; U[o + 3] = w - (nx * px + ny * py + nz * pz); }
 // sun shadow matrix: a box of half width R around (cx, cy, cz), written at float offset `at` of every view; with
-// `cull` also the shadow view's own matrix and planes
-const LR = vnorm([SUN[2], 0, -SUN[0]]), LU = vcross(SUN, LR);
-function shadowMat(at, cx, cy, cz, R, d0, d1, size, cull) {
+// `cull` also the shadow view's own matrix and planes. The active light follows the day/night profile: the toggle
+// swaps ACTIVE_SUN (and the map basis LR/LU with it), so the per-frame cascade and the bakes all track it. `views`
+// false leaves the main/mirror copies alone (bakes run while the active profile is still on screen).
+let ACTIVE_SUN = night ? NIGHT_SUN : SUN;
+let LR = vnorm([ACTIVE_SUN[2], 0, -ACTIVE_SUN[0]]), LU = vcross(ACTIVE_SUN, LR);
+function shadowMat(at, cx, cy, cz, R, d0, d1, size, cull, views = true) {
   // snap to whole texels so the map doesn't crawl
-  const tx = 2 * R / size, px = round((LR[0] * cx + LR[1] * cy + LR[2] * cz) / tx) * tx, py = round((LU[0] * cx + LU[1] * cy + LU[2] * cz) / tx) * tx, pz = SUN[0] * cx + SUN[1] * cy + SUN[2] * cz, D = d1 - d0, m = UB[V_SH];
-  for (let i = 0; i < 3; i++) { m[at + i * 4] = LR[i] / R; m[at + i * 4 + 1] = LU[i] / R; m[at + i * 4 + 2] = -SUN[i] / D; m[at + i * 4 + 3] = 0; }
+  const tx = 2 * R / size, px = round((LR[0] * cx + LR[1] * cy + LR[2] * cz) / tx) * tx, py = round((LU[0] * cx + LU[1] * cy + LU[2] * cz) / tx) * tx, pz = ACTIVE_SUN[0] * cx + ACTIVE_SUN[1] * cy + ACTIVE_SUN[2] * cz, D = d1 - d0, m = UB[V_SH];
+  for (let i = 0; i < 3; i++) { m[at + i * 4] = LR[i] / R; m[at + i * 4 + 1] = LU[i] / R; m[at + i * 4 + 2] = -ACTIVE_SUN[i] / D; m[at + i * 4 + 3] = 0; }
   m[at + 12] = -px / R; m[at + 13] = -py / R; m[at + 14] = (d1 + pz) / D; m[at + 15] = 1;
-  for (let i = 0; i < 16; i++) { UB[V_MAIN][at + i] = m[at + i]; UB[V_MIR][at + i] = m[at + i]; }
+  if (views) { for (let i = 0; i < 16; i++) { UB[V_MAIN][at + i] = m[at + i]; UB[V_MIR][at + i] = m[at + i]; } }
   if (cull) {
     for (let i = 0; i < 16; i++) m[i] = m[at + i];
     plane(m, 0, LR[0], LR[1], LR[2], 0, 0, 0, R - px); plane(m, 1, -LR[0], -LR[1], -LR[2], 0, 0, 0, R + px);
@@ -118,29 +129,37 @@ function shadowMat(at, cx, cy, cz, R, d0, d1, size, cull) {
   }
 }
 
-// sky table and environment light (baked once)
+// sky table and environment light (baked once per profile: day sun, night moon — 2x the bake cost, ~+0.1-0.2 s)
 await say('Lighting the sky…', 0.1);
-const tSky = tex(256, 128, HDR, RT), tEnvRaw = tex(256, 256, HDR, RT, { layers: 6, mips: 9 }), tEnv = tex(256, 256, HDR, RT, { layers: 6, mips: 6 }), tIrr = tex(16, 16, HDR, RT, { layers: 6 });
+const tSky = tex(256, 128, HDR, RT), tSkyN = tex(256, 128, HDR, RT);
+const tEnvRaw = tex(256, 256, HDR, RT, { layers: 6, mips: 9 }), tEnvRawN = tex(256, 256, HDR, RT, { layers: 6, mips: 9 });
+const tEnv = tex(256, 256, HDR, RT, { layers: 6, mips: 6 }), tEnvN = tex(256, 256, HDR, RT, { layers: 6, mips: 6 });
+const tIrr = tex(16, 16, HDR, RT, { layers: 6 }), tIrrN = tex(16, 16, HDR, RT, { layers: 6 });
 const cubeView = (t, o = {}) => t.createView({ dimension: 'cube', ...o });
-{
-  const ms = mod(W_SKYLUT(AT), 'skylut');
+const cvEnv = cubeView(tEnv), cvIrr = cubeView(tIrr), cvEnvN = cubeView(tEnvN), cvIrrN = cubeView(tIrrN);
+const bakeSkyEnv = async (at, sun, label, tS, tER, tE, tI) => {
+  // the bake reads view.sun/sunc/night (sky azimuth, ground bounce, stars): the caller sets them per profile
+  const ms = mod(W_SKYLUT(at, sun, sun === NIGHT_SUN ? MOONSKY : 1, sun === NIGHT_SUN ? MOONTINT : [1, 1, 1]), 'skylut');
   let e = device.createCommandEncoder();
   const flush = async (m) => { Q.submit([e.finish()]); await ck(m); e = device.createCommandEncoder(); };
-  let r = e.beginRenderPass({ colorAttachments: [colorAtt(tSky.createView(), true)] });
+  let r = e.beginRenderPass({ colorAttachments: [colorAtt(tS.createView(), true)] });
   r.setPipeline(device.createRenderPipeline({ layout: 'auto', vertex: { module: ms, entryPoint: 'vs' }, fragment: { module: ms, entryPoint: 'fs', targets: [{ format: HDR }] } })); r.draw(3); r.end();
-  Q.writeBuffer(ubo[V_MAIN], 0, UB[V_MAIN]); await flush('sky table');
+  Q.writeBuffer(ubo[V_MAIN], 0, UB[V_MAIN]); await flush(label + 'sky table');
   const lEnv = layout('ussttk', VF), me = mod(W_ENV, 'env');
   const pEnv = device.createRenderPipeline({ layout: plOf(lEnv), vertex: { module: me, entryPoint: 'vs' }, fragment: { module: me, entryPoint: 'fs', targets: [{ format: HDR }] } });
   const face = (t, f, m) => t.createView({ dimension: '2d', baseArrayLayer: f, arrayLayerCount: 1, baseMipLevel: m, mipLevelCount: 1 });
-  const pass = (dst, f, m, mode, src) => { r = e.beginRenderPass({ colorAttachments: [colorAtt(face(dst, f, m), true)] }); r.setPipeline(pEnv); r.setBindGroup(0, group(lEnv, [ubo[V_MAIN], sRep, sLin, tSky, tNoiseA, src])); r.draw(3, 1, 0, f + 6 * mode); r.end(); };
+  const pass = (dst, f, m, mode, src) => { r = e.beginRenderPass({ colorAttachments: [colorAtt(face(dst, f, m), true)] }); r.setPipeline(pEnv); r.setBindGroup(0, group(lEnv, [ubo[V_MAIN], sRep, sLin, tS, tNoiseA, src])); r.draw(3, 1, 0, f + 6 * mode); r.end(); };
   // raw sky into mip 0 (the bound source is a stand-in mode 0 never samples), then its mips
-  for (let f = 0; f < 6; f++) pass(tEnvRaw, f, 0, 0, cubeView(tIrr));
-  for (let m = 1; m < 9; m++) for (let f = 0; f < 6; f++) pass(tEnvRaw, f, m, 1, cubeView(tEnvRaw, { baseMipLevel: m - 1, mipLevelCount: 1 }));
-  await flush('sky cube');
-  for (let m = 0; m < 6; m++) { for (let f = 0; f < 6; f++) pass(tEnv, f, m, 2 + m, cubeView(tEnvRaw)); await flush('sky cube, roughness ' + m); }
-  for (let f = 0; f < 6; f++) pass(tIrr, f, 0, 9, cubeView(tEnvRaw));
-  Q.submit([e.finish()]); await ck('sky irradiance');
-}
+  for (let f = 0; f < 6; f++) pass(tER, f, 0, 0, cubeView(tI));
+  for (let m = 1; m < 9; m++) for (let f = 0; f < 6; f++) pass(tER, f, m, 1, cubeView(tER, { baseMipLevel: m - 1, mipLevelCount: 1 }));
+  await flush(label + 'sky cube');
+  for (let m = 0; m < 6; m++) { for (let f = 0; f < 6; f++) pass(tE, f, m, 2 + m, cubeView(tER)); await flush(label + 'sky cube, roughness ' + m); }
+  for (let f = 0; f < 6; f++) pass(tI, f, 0, 9, cubeView(tER));
+  await flush(label + 'sky irradiance');
+};
+setViewSun(UB[V_MAIN], 0); await bakeSkyEnv(AT, SUN, '', tSky, tEnvRaw, tEnv, tIrr);
+setViewSun(UB[V_MAIN], 1); await bakeSkyEnv(ATN, NIGHT_SUN, 'night ', tSkyN, tEnvRawN, tEnvN, tIrrN);
+setViewSun(UB[V_MAIN], night);
 
 // the world: meshes, instances, levels of detail
 await say('Raising the city…', 0.2);
@@ -236,6 +255,9 @@ await say('Casting shadows…', 0.8);
 // sizes: SHN in quality.js; with no cascade one texel stands in
 const D16 = 'depth16unorm', DFAR = SH32 ? DEPTH : D16;
 const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
+// the night profile's baked maps: allocated now (two sets fit), filled by the first switch to night
+const tShN = [tSh[0], tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
+const shReady = [false, false]; // per profile: its baked maps are valid (the camera cascade tSh[0] is shared)
 const pSh32 = CASC ? shPipes(DEPTH) : null, pSh16 = shPipes(D16), pShFar = SH32 ? pSh32 : pSh16, tTop = tex(TOPPX, TOPPX, 'r16float', RT, { mips: 8 });
 const depthPass = (t, clear = true) => ({ colorAttachments: [], depthStencilAttachment: { view: t.createView(), depthClearValue: 1, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store' } });
 const drawList = (r, v, list) => { for (let i = 0; i < list.length; i++) r.drawIndexedIndirect(bArgs[v], list[i] * 20); };
@@ -260,15 +282,23 @@ const castInto = async (t, pipes, stat, R = 0, A = LR, B = LU) => {
     if (n > 1) await ck(`bake ${t.width} tile ${i},${j}`);
   }
 };
-{
+// one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main/mirror
+// matrices alone, so the frames of the active profile stay right while the other profile fills its textures
+const bakeShadowMaps = async (dst) => {
   const U = UB[V_SH]; U[O_MISC + 1] = 2; U[O_MISC + 2] = 0; U[O_MISC + 3] = 0; U[O_LODC] = 0; U[O_LODC + 1] = 0; U[O_LODC + 2] = 0;
   // each map draws only what lies inside its own box seen from the sun (planes set by shadowMat). Medium/Low never cast
   // at the finest LOD (lodb): a 23 cm texel can't tell them apart.
   U[O_LODB] = QL(0, mob ? 250 : 100, 250);
-  shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true); await castInto(tSh[1], pSh16, true, 480); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true); U[O_MISC + 2] = 0.2; await castInto(tSh[2], pShFar, true, 1400); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true); U[O_MISC + 2] = 1; await castInto(tSh[3], pShFar, true, 6800); await Q.onSubmittedWorkDone();
-  // top-down height map for sky visibility: +-512 m, heights -60 .. 200 m
+  shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, true, 480); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castInto(dst[2], pShFar, true, 1400); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, true, 6800); await Q.onSubmittedWorkDone();
+};
+const tShT0 = performance.now();
+await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
+if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
+{
+  const U = UB[V_SH];
+  // top-down height map for sky visibility: +-512 m, heights -60 .. 200 m (sun-independent: baked once)
   U.fill(0, 0, 16); U[0] = 1 / 512; U[9] = -1 / 512; U[6] = -1 / 260; U[14] = 200 / 260; U[15] = 1; U[O_MISC + 2] = 0;
   plane(U, 0, 1, 0, 0, 0, 0, 0, 512); plane(U, 1, -1, 0, 0, 0, 0, 0, 512); plane(U, 2, 0, 0, 1, 0, 0, 0, 512); plane(U, 3, 0, 0, -1, 0, 0, 0, 512);
   const tT = tex(TOPPX, TOPPX, CASC ? DEPTH : D16, RT); await castInto(tT, pSh32 || pSh16, true, 512, [1, 0, 0], [0, 0, -1]);
@@ -323,6 +353,9 @@ passShadow.timestampWrites = tsBE(2);
 let W = 0, H = 0, MW = 0, MH = 0, DW = 0, DH = 0, targets = [], hist = null;
 let passG, passG2, passGm, passAO, passVol, bgVol, passPolish, bgPolish, passLight, passLightM, passX1, passX1b, passXm, passWater, passX2, passTAA = [], passPost, bloomPass = [], bloomBG = [];
 let bgLight, bgLightM, bgAO, bgFx, bgFxM, bgTAA = [], bgPost = [], cpA, cpB, cpD, cpDc, cpSize;
+// one bind-group set per profile (0 day, 1 night); the toggle swaps the set, resize rebuilds both. The lets above
+// hold the ACTIVE profile's groups, assigned here and by setNight.
+const lightSets = [{}, {}];
 const NB = NBLOOM, FIXW = +QP.get('w') || 0, FIXH = +QP.get('h') || 0;
 const PIXTOP = QL(1e9, 2560 * 1440, 1280 * 720), PIXMIN = mob ? 25e4 : 4e5;
 let pix = +QP.get('pix') || (FIXW ? 1e9 : +SV[1] || (mob && LV > 1 ? 41e4 : 1e9));
@@ -352,14 +385,22 @@ function resize() {
   passG2 = { colorAttachments: [0, 1, 2].map((i) => colorAtt(g[i].createView(), false)), depthStencilAttachment: { view: g[3].createView(), depthLoadOp: 'load', depthStoreOp: 'store' }, timestampWrites: tsE(4) };
   const tVol = SHAFTS ? T(W >> 2, H >> 2, 'rg16float') : tWhite;
   if (SSAO) { passAO = { colorAttachments: [colorAtt(tAO.createView(), true)], timestampWrites: SHAFTS ? tsB(5) : tsBE(5) }; bgAO = group(lAO, [ubo[V_MAIN], g[3], g[1], g[2]]); }
-  if (SHAFTS) { passVol = { colorAttachments: [colorAtt(tVol.createView(), true)], timestampWrites: SSAO ? tsE(5) : tsBE(5) }; bgVol = group(lVol, [ubo[V_MAIN], sCmp, g[3], tSh[1], tSh[2]]); }
+  if (SHAFTS) passVol = { colorAttachments: [colorAtt(tVol.createView(), true)], timestampWrites: SSAO ? tsE(5) : tsBE(5) };
   passLight = { colorAttachments: [colorAtt(tA.createView(), true)], timestampWrites: tsBE(6) }; if (MIRROR) passLightM = { colorAttachments: [colorAtt(tMA.createView(), true)] };
-  if (POLISH) { passPolish = { colorAttachments: [colorAtt(tA.createView(), false)], timestampWrites: tsB(7) }; bgPolish = group(lPolish, [ubo[V_MAIN], sLin, tB, tDc, g[1], g[2], cubeView(tEnv)]); }
+  if (POLISH) passPolish = { colorAttachments: [colorAtt(tA.createView(), false)], timestampWrites: tsB(7) };
   passX1 = cPass(tA, g[3], POLISH ? undefined : tsB(7)); passX1b = cPass(tA, g[3]); passWater = cPass(tA, g[3]); passX2 = cPass(tA, g[3], tsE(7)); if (MIRROR) passXm = cPass(tMA, gm[3], tsE(3));
-  const lightBG = (u, g, ao, vol) => group(lLight, [u, sLin, sRep, sCmp, g[0], g[1], g[2], g[3], ao, tSky, cubeView(tEnv), cubeView(tIrr), tSh[0], tSh[1], tSh[2], tSh[3], tWater, tNoiseA, tTop, vol]);
-  bgLight = lightBG(ubo[V_MAIN], g, tAO, tVol); if (MIRROR) bgLightM = lightBG(ubo[V_MIR], gm, tWhite, tWhite);
-  const fxBG = (sc, d, rf) => group(lFx, [sc, d, rf, tSky, cubeView(tEnv), tSh[0], tSh[1], tSh[2], tSh[3], tWater, sCmp]);
-  bgFx = fxBG(tB, tDc, tMA); if (MIRROR) bgFxM = fxBG(tDummyC, tDummyD, tDummyC);
+  // lighting groups for both profiles: they differ only in the baked sky/env/shadow textures
+  for (const n of [0, 1]) {
+    const P = n ? { sky: tSkyN, env: cvEnvN, irr: cvIrrN, s1: tShN[1], s2: tShN[2], s3: tShN[3] } : { sky: tSky, env: cvEnv, irr: cvIrr, s1: tSh[1], s2: tSh[2], s3: tSh[3] };
+    const lightBG = (u, gg, ao, vol) => group(lLight, [u, sLin, sRep, sCmp, gg[0], gg[1], gg[2], gg[3], ao, P.sky, P.env, P.irr, tSh[0], P.s1, P.s2, P.s3, tWater, tNoiseA, tTop, vol]);
+    const fxBG = (sc, d, rf) => group(lFx, [sc, d, rf, P.sky, P.env, tSh[0], P.s1, P.s2, P.s3, tWater, sCmp]);
+    const S = lightSets[n];
+    S.bgLight = lightBG(ubo[V_MAIN], g, tAO, tVol); if (MIRROR) S.bgLightM = lightBG(ubo[V_MIR], gm, tWhite, tWhite);
+    S.bgFx = fxBG(tB, tDc, tMA); if (MIRROR) S.bgFxM = fxBG(tDummyC, tDummyD, tDummyC);
+    if (SHAFTS) S.bgVol = group(lVol, [ubo[V_MAIN], sCmp, g[3], P.s1, P.s2]);
+    if (POLISH) S.bgPolish = group(lPolish, [ubo[V_MAIN], sLin, tB, tDc, g[1], g[2], P.env]);
+  }
+  ({ bgLight, bgLightM, bgVol, bgPolish, bgFx, bgFxM } = lightSets[night]);
   passTAA = [0, 1].map((i) => ({ colorAttachments: [colorAtt(hist[i].createView(), true)], timestampWrites: tsBE(8) }));
   bgTAA = [0, 1].map((i) => group(lTAA, [ubo[V_MAIN], sLin, tA, hist[1 - i], g[3]]));
   const bl = []; for (let i = 0; i < NB; i++) bl.push(T(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR));
@@ -369,8 +410,7 @@ function resize() {
   for (let i = NB - 1; i > 0; i--) { bloomPass.push({ colorAttachments: [colorAtt(bl[i - 1].createView(), false)], timestampWrites: i === 1 ? tsE(9) : undefined }); for (const k of [0, 1]) bloomBG[k].push(blitBG(bl[i].createView())); }
   passPost = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }], timestampWrites: tsBE(10) };
   bgPost = [0, 1].map((i) => group(lPost, [ubo[V_MAIN], sLin, hist[i], bl[0]]));
-  cpA = { texture: tA }; cpB = { texture: tB }; cpD = { texture: g[3] }; cpDc = { texture: tDc }; cpSize = [W, H];
-  // start a new size from the old picture: with no history every resolution change would flash
+  cpA = { texture: tA }; cpB = { texture: tB }; cpD = { texture: g[3] }; cpDc = { texture: tDc }; cpSize = [W, H];  // start a new size from the old picture: with no history every resolution change would flash
   if (old) {
     const e = device.createCommandEncoder(), bg = blitBG(old.createView());
     for (const t of hist) { const r = e.beginRenderPass({ colorAttachments: [colorAtt(t.createView(), true)] }); r.setPipeline(pFit); r.setBindGroup(0, bg); r.draw(3); r.end(); }
@@ -411,6 +451,34 @@ const follow = (dt) => {
 };
 resize();
 addEventListener('resize', resize);
+
+// day/night toggle: swap the baked textures' bind groups and the per-view sun/exposure/night uniforms, both
+// preallocated. The first switch to a profile bakes its shadow maps once with that profile's sun (frames idle for
+// it, about a second on High); after that switching is instant.
+let rebake = false; // a shadow bake is running: frame() idles (UB[V_SH] and the map contents are being rewritten)
+let dnB = null; // the menu's Day/Night buttons (wired in the menu section below)
+const setNight = async (n) => {
+  n = n ? 1 : 0; if (n === night) return;
+  night = n;
+  ACTIVE_SUN = n ? NIGHT_SUN : SUN; LR = vnorm([ACTIVE_SUN[2], 0, -ACTIVE_SUN[0]]); LU = vcross(ACTIVE_SUN, LR);
+  for (const U of UB) setViewSun(U, n);
+  if (!shReady[n]) {
+    rebake = true;
+    const t0 = performance.now();
+    await bakeShadowMaps(n ? tShN : tSh); shReady[n] = true;
+    if (QP.has('log')) console.log(`shadow rebake (${n ? 'night' : 'day'} sun) ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+    rebake = false;
+  }
+  shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true);
+  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true);
+  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true);
+  ({ bgLight, bgLightM, bgVol, bgPolish, bgFx, bgFxM } = lightSets[n]);
+  F[RESET] = 1; // the TAA history is from the other profile
+  if (!AUTO) { try { localStorage.atlasNight = n ? '1' : '0'; } catch {} }
+  if (dnB) { dnB[0].className = n ? '' : 'on'; dnB[1].className = n ? 'on' : ''; }
+  if (AUTO) console.log(`profile: ${n ? 'night' : 'day'} · sun ${ACTIVE_SUN.map((v) => v.toFixed(2))} · sunc ${(n ? SUNCN : SUNC).map((v) => v.toFixed(3))} · expo ${n ? EXPO_N : EXPO}`);
+};
+window.__night = (n) => setNight(n === undefined ? 1 - night : n); // headless tests / console
 
 // frame
 const JIT = new Float32Array(32); // Halton (2, 3) sub-pixel offsets
@@ -512,7 +580,7 @@ function render() {
   r.setPipeline(pGlassB); drawList(r, V_MAIN, LS[K.GLASS].all); r.setPipeline(pGlassF); drawList(r, V_MAIN, LS[K.GLASS].all); r.end();
   // TAA into this frame's history, bloom from it, then tone mapping
   r = e.beginRenderPass(passTAA[par]); r.setPipeline(pTAA); r.setBindGroup(0, bgTAA[par]); r.draw(3); r.end();
-  for (let i = 0; i < bloomPass.length; i++) { r = e.beginRenderPass(bloomPass[i]); r.setPipeline(i === 0 ? pDown0 : i < NB ? pDown : pUp); r.setBindGroup(0, bloomBG[par][i]); r.draw(3); r.end(); }
+  for (let i = 0; i < bloomPass.length; i++) { r = e.beginRenderPass(bloomPass[i]); r.setPipeline(i === 0 ? (night ? pDown0N : pDown0) : i < NB ? pDown : pUp); r.setBindGroup(0, bloomBG[par][i]); r.draw(3); r.end(); }
   passPost.colorAttachments[0].view = ctx.getCurrentTexture().createView();
   r = e.beginRenderPass(passPost); r.setPipeline(pPost); r.setBindGroup(0, bgPost[par]); r.draw(3); r.end();
   if (slot) { e.resolveQuerySet(qs, 0, NP * 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, NP * 16); }
@@ -554,7 +622,7 @@ function tune() {
 }
 function frame(now) {
   requestAnimationFrame(frame);
-  if (dead || document.hidden) return;
+  if (dead || document.hidden || rebake) return; // rebake: frames idle while the other profile's shadow maps bake
   const dtr = now - F[LAST];
   if (FPS && dtr < 1000 / FPS - 1) return;
   F[LAST] = now;
@@ -600,6 +668,7 @@ const key = (e, v) => {
       if (e.code === 'KeyH') { hud = !hud; tsOn = hud && hasTS; info.textContent = ''; }
       else if (e.code === 'KeyC') solid = !solid;
       else if (e.code === 'KeyG') gpsToggle();
+      else if (e.code === 'KeyN') setNight(1 - night);
       else if (e.code >= 'Digit1' && e.code <= 'Digit6') { const p = POSES[e.code.charCodeAt(5) - 49]; if (p) { lookAt(...p); F[VX] = F[VY] = F[VZ] = 0; } }
     }
   }
@@ -637,6 +706,10 @@ canvas.addEventListener('click', capture);
 document.addEventListener('pointerlockchange', () => { if (!mob) ui(!document.pointerLockElement); });
 // detail buttons: the current level is lit, the others reload with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { try { localStorage.atlas = 2 - i; } catch {} location.href = location.href.replace(/[?&]lv=\d/, ''); }; });
+// light profile row: the active one lit, clicks toggle like key N
+dnB = $('dn').querySelectorAll('button');
+dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
+dnB[night ? 1 : 0].className = 'on';
 $('gb').onclick = gpsToggle; // the menu's GPS button toggles like the key
 
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing

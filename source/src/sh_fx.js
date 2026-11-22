@@ -123,7 +123,8 @@ const W_FX2 = /*wgsl*/`
   var z2 = viewZ(uv2); if (z2 < zw) { uv2 = suv; z2 = zs; }
   let bed = worldAt(uv2, z2); let path = max(z2 - zw, 0.) * dist / zw; let depth = max(p.y - bed.y, 0.);
   var under = textureSampleLevel(tScene, sLin, uv2, 0.).rgb; var sig: vec3f; var scat: vec3f; var sA = .2;
-  let amb = skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12;
+  // ambient in the body: night keeps the water black glass (the sky table is dim, but the moon's share is cut too)
+  let amb = (skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12) * mix(1., .35, view.night.x);
   let shw = shadow(p, vec3f(0., 1., 0.));
   if (kind == 0u) { sig = vec3f(.26, .045, .04); scat = vec3f(.0, .035, .04) * amb; sA = .05; }
   else if (kind == 1u) { sig = vec3f(2.4, 3., 1.3); scat = vec3f(.011, .006, .12) * (.35 + .65 * shw); sA = 2.5; }

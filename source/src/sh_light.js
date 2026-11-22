@@ -51,7 +51,8 @@ fn hazeOD(ro: vec3f, rd: vec3f, d: f32) -> f32 {
 }
 fn aerial(c: vec3f, ro: vec3f, rd: vec3f, d: f32) -> vec3f {
   let od = hazeOD(ro, rd, min(d, 150000.));
-  let tr = exp(-od * vec3f(3.e-4, 3.4e-4, 4.e-4));
+  // night: moonlit air scatters blue and eats red first, so distance cools into the sky instead of warming
+  let tr = exp(-od * mix(vec3f(3.e-4, 3.4e-4, 4.e-4), vec3f(4.2e-4, 3.4e-4, 2.6e-4), view.night.x));
   // near haze is open-sky blue, far haze the horizon's colour, so distant sea and hills dissolve into the sky
   let ins = mix(skyLut(normalize(vec3f(rd.x, max(rd.y, 0.) + .035, rd.z))), skyLut(normalize(vec3f(-view.sun.z, .1, view.sun.x))) * vec3f(.9, 1., 1.12), .62 * exp(-od * 1.5e-4));
   return c * tr + ins * (1. - exp(-od * 3.3e-4));
@@ -260,6 +261,11 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   // a recessed pane still mirrors what's in front: the reveal dims it only a little
   if (glass) { env = surround(R, env, wp); so = mix(so, 1., .6); }
   col += env * envBRDF(f0, rough, nv) * so;
+  // night: window panes glow — the G-buffer holds the warm pane colour instead of a ray-marched room (see sh_scene);
+  // bright enough to clear the night bloom threshold, so lit windows are the only wide bloom in the city.
+  // Street lamps (planned, no meshes yet) enter here too: heads are K.SOLID instances of M.ALLOY whose G-buffer
+  // gains an emissive flag like the panes', and their ground pools are a distance fall-off added next to this term.
+  if (glass && view.night.x > .5) { col += alb * 9.; }
   // the crystal's own light, close by: breathing and flaring with the pulse
   let lc = vec3f(0., 60., 0.) - wp; let dl = dot(lc, lc);
   col += dc * vec3f(.75, .9, 1.) * (.5 + .5 * view.pulse.y + 1.6 * view.pulse.z) * 28. / (dl + 90.) * sat(dot(N, lc) * inverseSqrt(dl) * .7 + .3) * ao;
@@ -340,8 +346,8 @@ fn agx(c: vec3f) -> vec3f {
   c = max(c + (c * k - nb * kn) * .3 / k, vec3f(0.));
   let bl = textureSampleLevel(tB, sLin, uv, 0.).rgb;
   c = mix(c, bl, .04);
-  // exposure, soft vignette, white balance for the warm low sun
-  let q = uv - .5; c *= (1. - dot(q, q) * .3) * view.sunc.w * vec3f(1.07, 1., .9);
+  // exposure, soft vignette, white balance: warm for the low sun, cool for the moon
+  let q = uv - .5; c *= (1. - dot(q, q) * .3) * view.sunc.w * mix(vec3f(1.07, 1., .9), vec3f(.96, 1., 1.09), view.night.x);
   c = agx(c);
   let n = ign(fc.xy) + ign(fc.xy + 37.) - 1.;
   return vec4f(c + n / 255., 1.);

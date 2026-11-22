@@ -365,32 +365,45 @@ const FLOWERS = array<vec3f, 8>(vec3f(.52, .08, .24), vec3f(.8, .36, .5), vec3f(
     // window glass: the dim warm room behind; the lighting pass adds the Fresnel reflection (last G-buffer channel = glass)
     glass = 1.; o.rough = .05; o.alb = vec3f(.05, .046, .042);
     if (i.uv.z > .002) {
-      // a wall window's pane has its own uv (0-1) and random (uv.z); the room is a box behind it, ray-traced in the
-      // pane's frame, so it shifts with the camera
-      let u = i.uv.xy; let T = normalize(cross(vec3f(0., 1., 0.), N) + vec3f(1e-5, 0., 0.));
-      let sg = sign(dot(dx, T) * uvx.x + dot(dy, T) * uvy.x + 1e-12); // which way u runs along the wall
-      let E = normalize(p - view.cam.xyz); let ez = max(-dot(E, N), .2);
-      let sl = vec2f(dot(E, T) * sg * 1.4, E.y * 1.1) / ez; // ray drift across the room, in pane sizes (the room is deeper than wide)
-      var t = 1.; var side = 0; // 0 back wall, 1 side wall, 2 floor or ceiling
-      if (abs(sl.x) > 1e-4) { let ts = (select(-.6, 1.6, sl.x > 0.) - u.x) / sl.x; if (ts < t) { t = ts; side = 1; } }
-      if (abs(sl.y) > 1e-4) { let tf = (select(-.45, 1.25, sl.y > 0.) - u.y) / sl.y; if (tf < t) { t = tf; side = 2; } }
-      let q = u + sl * t; let r = h21(vec2f(floor(i.uv.z * 255. + .5), dot(i.q, vec4f(13.1, 71.7, 31.3, 47.9)))); // rounded: interpolation leaves the number slightly off
-      // warm grey walls, darker up and in the corners; a paler floor
-      var room = vec3f(.17, .15, .125) * (.55 + .45 * sat(1. - q.y)) * mix(.8, 1.15, r);
-      if (side == 1) { room *= .7; } else if (side == 2) { room = select(vec3f(.065, .06, .054), vec3f(.27, .22, .16) * (1.3 - t), sl.y < 0.); }
-      else {
-        // back wall: a doorway or a picture, by the window's number
-        let dq = abs(q - vec2f(.2 + .6 * fract(r * 5.3), .1)); if (r < .45 && dq.x < .16 && dq.y < .62) { room *= .35; }
-        let pq = abs(q - vec2f(.25 + .5 * fract(r * 9.1), .62)); if (r > .6 && pq.x < .17 && pq.y < .13) { room = vec3f(.2, .16, .1) * (.6 + .8 * fract(r * 31.)); }
-      }
-      o.alb = room * (1. - .45 * t);
-      // some windows have a half-drawn curtain (folds fade before aliasing)
-      let fu = max(abs(uvx.x), abs(uvy.x));
-      if (r > .42) {
-        let cu = select(u.x, 1. - u.x, fract(r * 3.7) > .5); let cw = (.2 + .22 * fract(r * 13.3)) * (1. + .05 * sin(u.y * 7. + r * 20.) * u.y);
-        let fold = .5 + .5 * sin(cu / cw * 16. + r * 40.);
-        let cur = vec3f(.5, .46, .4) * mix(vec3f(1.), vec3f(.85, .92, 1.05), fract(r * 23.)) * mix(.8, .62 + .36 * fold, sat(1. - fu / (cw * .12)));
-        o.alb = mix(o.alb, cur, 1. - ss(cw - fu, cw + fu, cu));
+      // a wall window's pane has its own uv (0-1) and random (uv.z); r salts the room by day and the night glow alike
+      let u = i.uv.xy; let fu = max(abs(uvx.x), abs(uvy.x));
+      let r = h21(vec2f(floor(i.uv.z * 255. + .5), dot(i.q, vec4f(13.1, 71.7, 31.3, 47.9)))); // rounded: interpolation leaves the number slightly off
+      if (view.night.x > .5) {
+        // night: no ray-marched room — ~55% of panes glow warm (2900-4000 K), some of those dim, the rest stay dark;
+        // the pane colour lands in the G-buffer and the lighting pass scales it up (only emissives bloom at night)
+        var e = mix(vec3f(1., .62, .36), vec3f(1., .84, .66), fract(r * 13.7)) * step(.45, fract(r * 7.31)) * mix(1., .16, step(.78, fract(r * 5.7))) * (.6 + .4 * fract(r * 31.1));
+        e *= 1. - .5 * ss(.25, 1., u.y); // dimmer towards the ceiling
+        if (r > .42) { // the day code's curtain: dark cloth over the glow
+          let cu = select(u.x, 1. - u.x, fract(r * 3.7) > .5); let cw = (.2 + .22 * fract(r * 13.3)) * (1. + .05 * sin(u.y * 7. + r * 20.) * u.y);
+          e = mix(e, vec3f(.012, .011, .01), 1. - ss(cw - fu, cw + fu, cu));
+        }
+        o.alb = e;
+      } else {
+        // the room is a box behind the pane, ray-traced in the pane's frame, so it shifts with the camera
+        let T = normalize(cross(vec3f(0., 1., 0.), N) + vec3f(1e-5, 0., 0.));
+        let sg = sign(dot(dx, T) * uvx.x + dot(dy, T) * uvy.x + 1e-12); // which way u runs along the wall
+        let E = normalize(p - view.cam.xyz); let ez = max(-dot(E, N), .2);
+        let sl = vec2f(dot(E, T) * sg * 1.4, E.y * 1.1) / ez; // ray drift across the room, in pane sizes (the room is deeper than wide)
+        var t = 1.; var side = 0; // 0 back wall, 1 side wall, 2 floor or ceiling
+        if (abs(sl.x) > 1e-4) { let ts = (select(-.6, 1.6, sl.x > 0.) - u.x) / sl.x; if (ts < t) { t = ts; side = 1; } }
+        if (abs(sl.y) > 1e-4) { let tf = (select(-.45, 1.25, sl.y > 0.) - u.y) / sl.y; if (tf < t) { t = tf; side = 2; } }
+        let q = u + sl * t;
+        // warm grey walls, darker up and in the corners; a paler floor
+        var room = vec3f(.17, .15, .125) * (.55 + .45 * sat(1. - q.y)) * mix(.8, 1.15, r);
+        if (side == 1) { room *= .7; } else if (side == 2) { room = select(vec3f(.065, .06, .054), vec3f(.27, .22, .16) * (1.3 - t), sl.y < 0.); }
+        else {
+          // back wall: a doorway or a picture, by the window's number
+          let dq = abs(q - vec2f(.2 + .6 * fract(r * 5.3), .1)); if (r < .45 && dq.x < .16 && dq.y < .62) { room *= .35; }
+          let pq = abs(q - vec2f(.25 + .5 * fract(r * 9.1), .62)); if (r > .6 && pq.x < .17 && pq.y < .13) { room = vec3f(.2, .16, .1) * (.6 + .8 * fract(r * 31.)); }
+        }
+        o.alb = room * (1. - .45 * t);
+        // some windows have a half-drawn curtain (folds fade before aliasing)
+        if (r > .42) {
+          let cu = select(u.x, 1. - u.x, fract(r * 3.7) > .5); let cw = (.2 + .22 * fract(r * 13.3)) * (1. + .05 * sin(u.y * 7. + r * 20.) * u.y);
+          let fold = .5 + .5 * sin(cu / cw * 16. + r * 40.);
+          let cur = vec3f(.5, .46, .4) * mix(vec3f(1.), vec3f(.85, .92, 1.05), fract(r * 23.)) * mix(.8, .62 + .36 * fold, sat(1. - fu / (cw * .12)));
+          o.alb = mix(o.alb, cur, 1. - ss(cw - fu, cw + fu, cu));
+        }
       }
     }
   } else if (mat == 7u) {

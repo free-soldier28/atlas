@@ -4,7 +4,8 @@
 const ATM = { RG: 6360e3, RT: 6440e3, BR: [5.802e-6, 13.558e-6, 33.1e-6], BM: 0.85e-5, BME: 0.95e-5, BO: [0.65e-6, 1.881e-6, 0.085e-6], HR: 8000, HM: 1200 };
 const E0 = 16; // sun illuminance above the atmosphere, scene units
 // ground-to-sun transmittance, and the multiple-scattering factor PSI (Hillaire 2020) at the ground
-const atmo = () => {
+// (called once per profile: the day sun, and the night moon)
+const atmo = (sun) => {
   const { RG, RT, BR, BM, BME, BO, HR, HM } = ATM, o = [0, RG + 30, 0];
   const dens = (p) => { const h = hypot(p[0], p[1], p[2]) - RG; return [exp(-h / HR), exp(-h / HM), max(0, 1 - abs(h - 25e3) / 15e3)]; };
   const far = (p, d, R) => { const b = p[0] * d[0] + p[1] * d[1] + p[2] * d[2], c = p[0] * p[0] + p[1] * p[1] + p[2] * p[2] - R * R, q = b * b - c; return q < 0 ? -1 : -b + sqrt(q); };
@@ -14,7 +15,7 @@ const atmo = () => {
     for (let i = 0; i < n; i++) { const t = (i + 0.5) * dt, q = dens([p[0] + d[0] * t, p[1] + d[1] * t, p[2] + d[2] * t]); od[0] += q[0] * dt; od[1] += q[1] * dt; od[2] += q[2] * dt; }
     return [0, 1, 2].map((c) => exp(-(BR[c] * od[0] + BME * od[1] + BO[c] * od[2])));
   };
-  const sd = [hypot(SUN[0], SUN[2]), SUN[1], 0], Ts = trans(o, sd, 64);
+  const sd = [hypot(sun[0], sun[2]), sun[1], 0], Ts = trans(o, sd, 64);
   const L2 = [0, 0, 0], fms = [0, 0, 0], NA = 8, NB = 16, NS = 24;
   for (let a = 0; a < NA; a++) for (let b = 0; b < NB; b++) {
     const ct = 1 - 2 * (a + 0.5) / NA, st = sqrt(1 - ct * ct), ph = (b + 0.5) / NB * TAU, d = [st * cos(ph), ct, st * sin(ph)];
@@ -62,6 +63,7 @@ struct View {
   misc: vec4f, // 1 = drop TAA history, view kind (0 main, 1 mirror, 2 shadow), lod scale, wind on/off
   lodc: vec4f, // LOD reference point; w: 1 / the level's distance scale
   lodb: vec4f, // x: minimum LOD distance (baked maps on Medium/Low: never the finest)
+  night: vec4f, // x: 1 = the night profile (moon sun, stars, emissive windows, cool grade); yzw spare
 }
 `;
 // full-screen triangle
@@ -251,12 +253,13 @@ fn carpet(c0: LA, p: vec2f, n: i32, sd: f32, ln: f32, wd: f32) -> LA {
 }
 ` + W_LEAF_CROWN + W_LEAF_WALL;
 
-// sky table (baked once: the sun never moves)
+// sky table (baked once per profile: the sun never moves within a profile)
 // clear-sky radiance per unit sun illuminance: u = azimuth from the sun, v = elevation (denser near the horizon).
-// Single scattering marched, multiple from PSI.
-const W_SKYLUT = (a) => W_COMMON + W_FS + /*wgsl*/`
+// Single scattering marched, multiple from PSI. k + tint scale the march (1 day; night: the moon's dim blue, see
+// main.js — the display path multiplies by E0 as always, so the table carries the profile's absolute level).
+const W_SKYLUT = (a, sun, k = 1, tint = [1, 1, 1]) => W_COMMON + W_FS + /*wgsl*/`
 const RG = ${ATM.RG}.; const RT = ${ATM.RT}.; const BR = vec3f(${ATM.BR}); const BM = ${ATM.BM}; const BME = ${ATM.BME}; const BO = vec3f(${ATM.BO});
-const PSI = vec3f(${a.PSI}); const SE = ${asin(SUN[1])};
+const PSI = vec3f(${a.PSI}); const SE = ${asin(sun[1])};
 fn dens(p: vec3f) -> vec3f { let h = length(p) - RG; return vec3f(exp(-h / ${ATM.HR}.), exp(-h / ${ATM.HM}.), max(0., 1. - abs(h - 25000.) / 15000.)); }
 fn ext(d: vec3f) -> vec3f { return BR * d.x + vec3f(BME * d.y) + BO * d.z; }
 fn hit(p: vec3f, d: vec3f, r: f32, nearSide: bool) -> f32 { let b = dot(p, d); let q = b * b - dot(p, p) + r * r; if (q < 0.) { return -1.; } if (nearSide) { if (b > 0.) { return -1.; } return -b - sqrt(q); } return -b + sqrt(q); }
@@ -276,7 +279,7 @@ fn odSun(p: vec3f, sd: vec3f) -> vec3f { let tm = hit(p, sd, RT, false); let dt 
     L += exp(-ext(od)) * ((BR * d.x * pr + BM * d.y * pm) * ts + (BR * d.x + BM * d.y) * PSI) * dt;
     od += d * dt * .5;
   }
-  return vec4f(L, 1.);
+  return vec4f(L * vec3f(${tint}) * ${k.toFixed(8)}, 1.);
 }
 `;
 // the sky as seen: table, sun disc, drifting clouds. Needs tSky, tNoiseA, sRep, view.
@@ -313,13 +316,26 @@ fn clouds(rd: vec3f, base: vec3f) -> vec3f {
   let far = exp(-t / 26000.);
   return mix(base, col, dn * .93 * far * ss(.012, .05, rd.y));
 }
+// stars: one faint point per sparse cell of a direction lattice. Static (no twinkle); the dot is ~half a pixel
+// across, so TAA accumulates it steadily; ~6% of cells are filled, brightness spread over ~1.5 mag.
+fn stars(rd: vec3f) -> vec3f {
+  let q = rd * 140.; let id = floor(q);
+  let r = h22(id.xy + vec2f(id.z * 61.7, id.z * 23.9)); if (r.x > .06) { return vec3f(0.); }
+  let r2 = h21(vec2f(id.x * 7.3 + id.y * 3.1, id.z));
+  let d = length((q - id) - vec3f(.2 + .6 * r.y, .2 + .6 * r2, .2 + .6 * fract(r.y * 7.7)));
+  return vec3f(1., .97, .9) * exp(-d * d * 140.) * (.25 + .75 * r2);
+}
 fn sky(rd: vec3f, disc: bool) -> vec3f {
   var c = skyLut(rd);
   if (disc) {
-    // disc and a soft round glare, no rays
+    // disc and a soft round glare, no rays; night: a small hard moon (its sunc alone would be invisible) with a
+    // faint blue halo, slightly blooming
     let mu = sat(dot(rd, view.sun.xyz));
     c += min(view.sunc.rgb * 900., vec3f(260.)) * ss(.99996, .999975, mu) + view.sunc.rgb * (pow(mu, 9000.) * 2.5 + pow(mu, 1800.) * .25 + pow(mu, 250.) * .02);
+    if (view.night.x > .5) { c += vec3f(1., .99, .95) * 9. * ss(.999982, .99999, mu) + vec3f(.55, .65, .85) * (pow(mu, 8000.) * .15); }
   }
+  // night: stars over the table, under the clouds
+  if (view.night.x > .5) { c += stars(rd); }
   return clouds(rd, c);
 }
 `;
@@ -378,8 +394,9 @@ fn ham(i: u32, n: u32) -> vec2f { return vec2f(f32(i) / f32(n), f32(reverseBits(
 }
 `;
 
-// blits: mips and the bloom chain
-const W_BLIT = W_FS + /*wgsl*/`
+// blits: mips and the bloom chain. blt: the first bloom step's threshold — day 0 (today's soft knee), night one
+// high enough that only emissives (windows, the moon, the pulse) clear it. main.js builds two modules from this.
+const W_BLIT = (blt) => W_FS + /*wgsl*/`
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;
 fn uvOf(fc: vec4f, k: f32) -> vec2f { return fc.xy * k / vec2f(textureDimensions(t)); }
@@ -388,8 +405,8 @@ struct Fit { @builtin(position) p: vec4f, @location(0) uv: vec2f }
 @vertex fn vsFit(@builtin(vertex_index) i: u32) -> Fit { let q = vec2f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1)); return Fit(vec4f(q, 0., 1.), vec2f(q.x * .5 + .5, .5 - q.y * .5)); }
 @fragment fn fsFit(i: Fit) -> @location(0) vec4f { return textureSampleLevel(t, s, i.uv, 0.); }
 @fragment fn fsMip(@builtin(position) fc: vec4f) -> @location(0) vec4f { return textureSampleLevel(t, s, uvOf(fc, 2.), 0.); }
-// first bloom step: taps weighted down by brightness, so one hot pixel can't flicker
-fn kar(c: vec3f) -> vec4f { let w = 1. / (1. + max(c.r, max(c.g, c.b))); return vec4f(c * w, w); }
+// first bloom step: taps weighted down by brightness, so one hot pixel can't flicker; BLT cuts everything below it
+fn kar(c: vec3f) -> vec4f { let d = max(c - vec3f(${blt.toFixed(4)}), vec3f(0.)); let w = 1. / (1. + max(d.r, max(d.g, d.b))); return vec4f(d * w, w); }
 @fragment fn fsDown0(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let uv = uvOf(fc, 2.); let e = 1. / vec2f(textureDimensions(t));
   let m = kar(min(textureSampleLevel(t, s, uv + e * vec2f(-1., -1.), 0.).rgb, vec3f(64.))) + kar(min(textureSampleLevel(t, s, uv + e * vec2f(1., -1.), 0.).rgb, vec3f(64.)))
