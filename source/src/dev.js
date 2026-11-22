@@ -92,28 +92,15 @@
     }
     return `path: peak speed ${vm.toFixed(1)} m/s, peak yaw rate ${wm.toFixed(1)} deg/s, lowest ${lo.toFixed(1)} m above ground or water (at ${lt.toFixed(1)} s)`;
   };
-  // leaf atlas as the materials see it, over a wall colour (best at --w 2048 --h 1536)
-  window.__atlas = () => {
-    const m = mod(W_FS + /*wgsl*/`@group(0) @binding(0) var t: texture_2d<f32>; @group(0) @binding(1) var s: sampler;
-@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
-  let uv = fc.xy / vec2f(${W}., ${H}.); let c = textureSampleLevel(t, s, uv, 0.); let g = fract(uv * vec2f(4., 3.));
-  var bg = vec3f(.78, .76, .7); if (min(g.x, g.y) < .004) { bg = vec3f(.3); }
-  var col = mix(vec3f(.36, .5, .14), vec3f(.16, .36, .2), c.b) * (.45 + .75 * c.r); if (c.g > .5) { col = vec3f(.85, .3, .55) * (.6 + .5 * c.r); }
-  return vec4f(mix(bg, col, step(.5, c.a)), 1.);
-}`, 'atlas'), e = device.createCommandEncoder();
-    const r = e.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store' }] });
-    r.setPipeline(fsPipe(m, lBlit, FMT)); r.setBindGroup(0, blitBG(mipView(tLeaf, 0))); r.draw(3); r.end(); Q.submit([e.finish()]);
-    return canvas.toDataURL('image/png');
-  };
   // per view, what the last frame drew: instances and triangles by kind, and the heaviest (type, LOD) slots,
   // read back from the cull pass's indirect draw arguments
   window.__count = async () => {
-    const KN = ['solid', 'leaf', 'crystal', 'glass', 'water', 'cascade'], out = [];
-    for (const [v, name, skip] of [[V_MAIN, 'main', 0], [V_MIR, 'mirror', NO_MIRROR], [V_SH, 'shadow', NO_NEAR | NO_SHADOW]]) {
+    const KN = ['solid', , , , 'water'], out = []; // by the world's kind constants: map packs register solid and water
+    for (const [v, name, skip] of [[V_MAIN, 'main', 0], [V_SH, 'shadow', NO_NEAR | NO_SHADOW]]) {
       const rb = device.createBuffer({ size: argData.byteLength, usage: BU.MAP_READ | BU.COPY_DST }), e = device.createCommandEncoder();
       e.copyBufferToBuffer(bArgs[v], 0, rb, 0, argData.byteLength); Q.submit([e.finish()]); await rb.mapAsync(GPUMapMode.READ);
       const a = new Uint32Array(rb.getMappedRange()), by = {}, top = []; let tot = 0;
-      slots.forEach((s, i) => { if (s.flags & skip || (v === V_SH && s.kind > K.LEAF)) return; const n = a[i * 5 + 1], t = n * s.mesh.ni / 3, k = KN[s.kind]; by[k] = by[k] || [0, 0]; by[k][0] += n; by[k][1] += t; tot += t; if (n) top.push([t, `${n}x${s.mesh.ni / 3}(${k[0]}${s.lod})`]); });
+      slots.forEach((s, i) => { if (s.flags & skip || (v === V_SH && s.kind !== K.SOLID)) return; const n = a[i * 5 + 1], t = n * s.mesh.ni / 3, k = KN[s.kind]; by[k] = by[k] || [0, 0]; by[k][0] += n; by[k][1] += t; tot += t; if (n) top.push([t, `${n}x${s.mesh.ni / 3}(${k[0]}${s.lod})`]); });
       top.sort((p, q) => q[0] - p[0]);
       out.push(`${name}: ${(tot / 1e6).toFixed(2)} M tris · ` + Object.entries(by).map(([k, c]) => `${k} ${c[0]} inst ${(c[1] / 1e6).toFixed(2)} M`).join(' · ') + '\n   top: ' + top.slice(0, +QP.get('top') || 9).map((t) => t[1]).join('  '));
       rb.unmap(); rb.destroy();

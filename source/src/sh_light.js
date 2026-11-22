@@ -58,7 +58,7 @@ fn aerial(c: vec3f, ro: vec3f, rd: vec3f, d: f32) -> vec3f {
   return c * tr + ins * (1. - exp(-od * 3.3e-4));
 }
 // the Atlantis energy pulse is retired (map packs have no crystal or inlay podium; its violet ring was the night
-// artefact): main.js parks view.pulse with static values, and the terms below are gone. The View field stays.
+// artefact): no terms read view.pulse any more. The View field stays only so the uniform layout is unchanged.
 `;
 
 // ambient occlusion (half resolution, GTAO)
@@ -105,31 +105,6 @@ const BAYER = array<u32, 16>(0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u,
     vis += pl * ((cn + 2. * h0 * sin(ng) - cos(2. * h0 - ng)) + (cn + 2. * h1 * sin(ng) - cos(2. * h1 - ng))) * .25;
   }
   return vec4f(sat(vis / 3.), P.z, 0., 1.);
-}
-`;
-
-// light shafts (quarter resolution)
-// how much of the haze along each ray is sunlit (baked maps); the lighting pass adds forward scattering for it
-const W_VOL = W_COMMON + W_FS + /*wgsl*/`
-@group(0) @binding(0) var<uniform> view: View;
-@group(0) @binding(1) var sCmp: sampler_comparison;
-@group(0) @binding(2) var tD: texture_depth_2d;
-@group(0) @binding(3) var tSh1: texture_depth_2d;
-@group(0) @binding(4) var tSh2: texture_depth_2d;
-@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
-  let px = min(vec2i(fc.xy) * 4 + 1, vec2i(view.res.xy) - 1); let dp = textureLoad(tD, px, 0);
-  let ndc = (vec2f(px) + .5) * view.res.zw * vec2f(2., -2.) + vec2f(-1., 1.) - view.jit.xy;
-  let ray = view.fwd.xyz + view.right.xyz * ndc.x * view.right.w + view.up.xyz * ndc.y * view.up.w; let rl = length(ray);
-  let z = view.fwd.w / max(dp, 1e-7); let far = min(z * rl, 800.); let rd = ray / rl;
-  let nz = ign(fc.xy + view.jit.z * 7.13); var acc = 0.; const N = 24.;
-  for (var i = 0.; i < N; i += 1.) {
-    let t = far * (i + nz) / N; let p = view.cam.xyz + rd * t;
-    let s1 = view.sm[1] * vec4f(p, 1.); var lit = 1.;
-    if (max(abs(s1.x), abs(s1.y)) < .985) { lit = textureSampleCompareLevel(tSh1, sCmp, vec2f(s1.x * .5 + .5, .5 - s1.y * .5), s1.z); }
-    else { let s2 = view.sm[2] * vec4f(p, 1.); if (max(abs(s2.x), abs(s2.y)) < .985) { lit = textureSampleCompareLevel(tSh2, sCmp, vec2f(s2.x * .5 + .5, .5 - s2.y * .5), s2.z); } }
-    acc += lit * exp(-max(p.y, 0.) / 650.);
-  }
-  return vec4f(acc / N * far / 800., z, 0., 1.);
 }
 `;
 
@@ -187,9 +162,9 @@ fn surround(R: vec3f, env: vec3f, wp: vec3f) -> vec3f {
   c = mix(c, mix(vec3f(.07, .1, .04), vec3f(.46, .43, .37), ss(.4, .6, n.b + m.a * .5)), ss(-.06, -.3, R.y));
   return mix(env, c * E, k);
 }
-// sunlit haze in front of the pixel: shaft texture, depth-weighted upsample, times forward scattering
+// sunlit haze in front of the pixel: the shaft texture (a white stand-in since the god-ray pass was cut: the upsample
+// reads a constant), depth-weighted, times forward scattering
 fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
-  if (view.misc.y > .5) { return vec3f(0.); }
   let mu = dot(rd, view.sun.xyz); let g = .78; let hg = (1. - g * g) / (4. * PI * pow(1. + g * g - 2. * g * mu, 1.5));
   // Low: no shaft texture, haze taken as fully sunlit
   if (LV > 1) { return view.sunc.rgb * (min(hg, .8) * 1.2e-5 + 1e-6) * min(z / max(dot(rd, view.fwd.xyz), 1e-3), 800.) * exp(-max(view.cam.y, 0.) / 650.) * .85; }
@@ -265,9 +240,6 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   // Street lamps (planned, no meshes yet) enter here too: heads are K.SOLID instances of M.ALLOY whose G-buffer
   // gains an emissive flag like the panes', and their ground pools are a distance fall-off added next to this term.
   if (glass && view.night.x > .5) { col += alb * 9.; }
-  // the crystal's own light, close by (map packs register none)
-  let lc = vec3f(0., 60., 0.) - wp; let dl = dot(lc, lc);
-  col += dc * vec3f(.75, .9, 1.) * .5 * 28. / (dl + 90.) * sat(dot(N, lc) * inverseSqrt(dl) * .7 + .3) * ao;
   return vec4f(aerial(col, view.cam.xyz, rd, dist) + shafts(fc.xy, z, rd), 1.);
 }
 `;

@@ -41,7 +41,7 @@ const fsPipe = (m, lay, format, entry = 'fs', blend) => device.createRenderPipel
 
 // samplers, detail textures
 const sRep = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: QL(8, 4, 1) });
-const sLin = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: QL(4, 2, 1) }); // anisotropic for the leaf atlas
+const sLin = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: QL(4, 2, 1) }); // anisotropic detail sampling
 const sCmp = device.createSampler({ compare: 'less-equal', magFilter: 'linear', minFilter: 'linear' });
 const lBlit = layout('ts', SS.FRAGMENT), mBlit = mod(W_BLIT(0), 'blit'), mBlitN = mod(W_BLIT(2.5), 'blitN'); // night: bloom threshold
 const ADD = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } };
@@ -55,10 +55,10 @@ const genMips = (e, t) => { for (let i = 1; i < t.mipLevelCount; i++) { const r 
 const T0 = performance.now(), ck = async (m) => { await Q.onSubmittedWorkDone(); if (QP.has('log')) console.log(`${((performance.now() - T0) / 1000).toFixed(2)} s  ${m}`); };
 await say('Mixing marble…', 0.05);
 const mipsOf = (n) => 32 - Math.clz32(n); // full mip chain length for size n
-const tNoiseA = tex(NOISEPX, NOISEPX, 'rgba8unorm', RT, { mips: mipsOf(NOISEPX) }), tNoiseN = tex(NOISEPX, NOISEPX, 'rgba8unorm', RT, { mips: mipsOf(NOISEPX) }), tLeaf = tex(LEAFPX * 4, LEAFPX * 3, 'rgba8unorm', RT, { mips: mipsOf(LEAFPX) - 1 }); // leaf atlas: 4 x 3 tiles
+const tNoiseA = tex(NOISEPX, NOISEPX, 'rgba8unorm', RT, { mips: mipsOf(NOISEPX) }), tNoiseN = tex(NOISEPX, NOISEPX, 'rgba8unorm', RT, { mips: mipsOf(NOISEPX) });
 {
   const m = mod(W_NOISE, 'noise');
-  for (const [t, entry] of [[tNoiseA, 'fsA'], [tNoiseN, 'fsN'], [tLeaf, 'fsLeaf']]) {
+  for (const [t, entry] of [[tNoiseA, 'fsA'], [tNoiseN, 'fsN']]) {
     const p = device.createRenderPipeline({ layout: 'auto', vertex: { module: m, entryPoint: 'vs' }, fragment: { module: m, entryPoint: entry, targets: [{ format: 'rgba8unorm' }] } });
     const e = device.createCommandEncoder(), r = e.beginRenderPass({ colorAttachments: [colorAtt(mipView(t, 0), true)] }); r.setPipeline(p); r.draw(3); r.end(); genMips(e, t);
     Q.submit([e.finish()]); await ck(entry);
@@ -71,10 +71,10 @@ const lWaves = layout('u', SS.FRAGMENT), pWaves = fsPipe(mod(W_WAVES, 'waves'), 
 const waterBG = [0, 1, 2, 3, 4].map((m) => blitBG(mipView(tWater, m)));
 
 // views
-// main, mirror and shadow views each have a uniform block (struct View in sh_base.js)
-const NU = 216, V_MAIN = 0, V_MIR = 1, V_SH = 2;
-const UB = [0, 1, 2].map(() => new Float32Array(NU)), ubo = UB.map(() => device.createBuffer({ size: NU * 4, usage: BU.UNIFORM | BU.COPY_DST }));
-const O_SM = 48, O_CAM = 112, O_RES = 116, O_JIT = 120, O_SUN = 124, O_SUNC = 128, O_RIGHT = 132, O_UP = 136, O_FWD = 140, O_PL = 144, O_PULSE = 168, O_MISC = 172, O_LODC = 176, O_LODB = 180, O_NIGHT = 184;
+// main and shadow views each have a uniform block (struct View in sh_base.js)
+const NU = 216, V_MAIN = 0, V_SH = 1;
+const UB = [0, 1].map(() => new Float32Array(NU)), ubo = UB.map(() => device.createBuffer({ size: NU * 4, usage: BU.UNIFORM | BU.COPY_DST }));
+const O_SM = 48, O_CAM = 112, O_RES = 116, O_JIT = 120, O_SUN = 124, O_SUNC = 128, O_RIGHT = 132, O_UP = 136, O_FWD = 140, O_PL = 144, O_MISC = 172, O_LODC = 176, O_LODB = 180, O_NIGHT = 184;
 const TANH = tan(30 * DEG), NEAR = 0.3, EXPO = 0.8, EXPO_N = 0.55;
 // light profile: 0 golden-hour day, 1 night. ?night=1|0 forces one (headless tests); else the stored choice, day default
 let night = 0;
@@ -112,7 +112,7 @@ function plane(U, k, nx, ny, nz, px, py, pz, w) { const o = O_PL + k * 4; U[o] =
 // sun shadow matrix: a box of half width R around (cx, cy, cz), written at float offset `at` of every view; with
 // `cull` also the shadow view's own matrix and planes. The active light follows the day/night profile: the toggle
 // swaps ACTIVE_SUN (and the map basis LR/LU with it), so the per-frame cascade and the bakes all track it. `views`
-// false leaves the main/mirror copies alone (bakes run while the active profile is still on screen).
+// false leaves the main copy alone (bakes run while the active profile is still on screen).
 let ACTIVE_SUN = night ? NIGHT_SUN : SUN;
 let LR = vnorm([ACTIVE_SUN[2], 0, -ACTIVE_SUN[0]]), LU = vcross(ACTIVE_SUN, LR);
 function shadowMat(at, cx, cy, cz, R, d0, d1, size, cull, views = true) {
@@ -120,7 +120,7 @@ function shadowMat(at, cx, cy, cz, R, d0, d1, size, cull, views = true) {
   const tx = 2 * R / size, px = round((LR[0] * cx + LR[1] * cy + LR[2] * cz) / tx) * tx, py = round((LU[0] * cx + LU[1] * cy + LU[2] * cz) / tx) * tx, pz = ACTIVE_SUN[0] * cx + ACTIVE_SUN[1] * cy + ACTIVE_SUN[2] * cz, D = d1 - d0, m = UB[V_SH];
   for (let i = 0; i < 3; i++) { m[at + i * 4] = LR[i] / R; m[at + i * 4 + 1] = LU[i] / R; m[at + i * 4 + 2] = -ACTIVE_SUN[i] / D; m[at + i * 4 + 3] = 0; }
   m[at + 12] = -px / R; m[at + 13] = -py / R; m[at + 14] = (d1 + pz) / D; m[at + 15] = 1;
-  if (views) { for (let i = 0; i < 16; i++) { UB[V_MAIN][at + i] = m[at + i]; UB[V_MIR][at + i] = m[at + i]; } }
+  if (views) { for (let i = 0; i < 16; i++) UB[V_MAIN][at + i] = m[at + i]; }
   if (cull) {
     for (let i = 0; i < 16; i++) m[i] = m[at + i];
     plane(m, 0, LR[0], LR[1], LR[2], 0, 0, 0, R - px); plane(m, 1, -LR[0], -LR[1], -LR[2], 0, 0, 0, R + px);
@@ -195,19 +195,17 @@ Wd.types.forEach((t, i) => {
 const argData = new Uint32Array(slots.length * 5);
 slots.forEach((s, i) => argData.set([s.mesh.ni, 0, s.mesh.i0, s.mesh.v0, s.first], i * 5));
 const bTypes = buf(new Uint8Array(tyData), BU.STORAGE);
-const bArgs = [0, 1, 2].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COPY_SRC)), bVis = [0, 1, 2].map(() => device.createBuffer({ size: max(16, nVis * 4), usage: BU.STORAGE }));
+const bArgs = [0, 1].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COPY_SRC)), bVis = [0, 1].map(() => device.createBuffer({ size: max(16, nVis * 4), usage: BU.STORAGE }));
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
-const bgCull = [0, 1, 2].map((v) => group(lCull, [ubo[v], bInst, bTypes, bArgs[v], bVis[v]]));
+const bgCull = [0, 1].map((v) => group(lCull, [ubo[v], bInst, bTypes, bArgs[v], bVis[v]]));
 const NG_R = ceil(slots.length / 64), NG_C = ceil((Wd.nI + 1) / 64); // +1: the marker instance
 // slot lists per kind; `skip` leaves out types flagged against a view
 const listOf = (kind, skip = 0, need = 0) => new Uint32Array(slots.map((s, i) => (s.kind === kind && !(s.flags & skip) && (s.flags & need) === need ? i : -1)).filter((i) => i >= 0));
-// all / mir: main and mirror views without the ground; gnd / gndMir: the ground, drawn last so covered pixels
-// are never shaded; near / cast: camera cascade and baked maps
-const LS = [K.SOLID, K.LEAF, K.CRYSTAL, K.GLASS, K.WATER, K.CASCADE].map((k) => ({ all: listOf(k, DRAW_LAST), mir: listOf(k, NO_MIRROR | DRAW_LAST), gnd: listOf(k, 0, DRAW_LAST), gndMir: listOf(k, NO_MIRROR, DRAW_LAST), near: listOf(k, NO_NEAR | NO_SHADOW), cast: listOf(k, NO_SHADOW | NO_BAKE) }));
-// main-view crystal in two steps: solid bodies, then the thin petals and panels
-const lsSolidX = listOf(K.CRYSTAL, THIN), lsThinX = listOf(K.CRYSTAL, 0, THIN);
-const NX = lsSolidX.length + lsThinX.length; // a map pack registers no crystal: skip the crystal steps (and their per-frame scene copies) when empty
+// one entry per kind the world registers, indexed by the world's kind constants (world.js). gnd: the ground,
+// drawn last so covered pixels are never shaded; near / cast: camera cascade and baked maps
+const LS = [];
+for (const k of [K.SOLID, K.WATER]) LS[k] = { all: listOf(k, DRAW_LAST), gnd: listOf(k, 0, DRAW_LAST), near: listOf(k, NO_NEAR | NO_SHADOW), cast: listOf(k, NO_SHADOW | NO_BAKE) };
 const tMap = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 const tLand = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 // ground maps are painted at 1 m/texel; Low uploads them at half size (mean of four)
@@ -222,33 +220,20 @@ Q.writeTexture({ texture: tMap }, mapOf(Wd.MAP), { bytesPerRow: MAPPX * 4 }, [MA
 await ck('ground maps');
 
 // scene pipelines
-const lScene = layout('ussrrttttt'), lFx = layout('tdttkddddtc', SS.FRAGMENT), plScene = plOf(lScene), plFx = plOf(lScene, lFx);
-const bgScene = [0, 1, 2].map((v) => group(lScene, [ubo[v], sRep, sLin, bInst, bVis[v], tNoiseA, tNoiseN, tLeaf, tMap, tLand]));
+const lScene = layout('ussrrtttt'), lFx = layout('tdtkddddtc', SS.FRAGMENT), plScene = plOf(lScene), plFx = plOf(lScene, lFx);
+const bgScene = [0, 1].map((v) => group(lScene, [ubo[v], sRep, sLin, bInst, bVis[v], tNoiseA, tNoiseN, tMap, tLand]));
 const A = (shaderLocation, offset, format) => ({ shaderLocation, offset, format });
 const vbLay = [{ arrayStride: 20, attributes: [A(0, 0, 'float32x3'), A(1, 12, 'snorm8x4'), A(2, 16, 'unorm8x4')] }];
 const mG = mod(LV > 1 ? W_GBUF_LOW : W_GBUF, 'gbuf'), mSh = mod(W_SHADOW, 'shadow'), mFx = mod(W_FX + W_FX2, 'fx');
-// `eq`: draws leaf colour where their depth already is; `pre`: lays that depth (fsDepth in sh_scene.js).
-// ?onepass: leaves in one step, for comparison
-const gPipe = (cull, refl, eq, pre) => device.createRenderPipeline({ layout: plScene, vertex: { module: mG, entryPoint: 'vs', buffers: vbLay },
-  fragment: { module: mG, entryPoint: pre ? 'fsDepth' : 'fs', targets: ['rgba8unorm', HDR, 'rgba8unorm'].map((format) => ({ format, writeMask: pre ? 0 : 15 })), constants: { REFL: refl } },
-  primitive: { cullMode: cull }, depthStencil: { format: DEPTH, depthWriteEnabled: !eq, depthCompare: eq ? 'equal' : 'greater' } });
-const TWO = LV < 2 && !QP.has('onepass');
-const leafPipes = (refl) => [gPipe('back', refl), TWO ? gPipe('none', refl, true) : gPipe('none', refl), TWO && gPipe('none', refl, false, true)];
-const pG = LV < 2 ? leafPipes(0) : [gPipe('back', 0)], pGm = MIRROR && leafPipes(1);
-const drawLeaves = (r, v, P, list) => { if (TWO) { r.setPipeline(P[2]); drawList(r, v, list); } r.setPipeline(P[1]); drawList(r, v, list); };
-// Low: leaf depth alone, cut out; then colour where the depth is theirs (W_GBUF_LOW)
-const lowLeaf = (entry, write, compare, mask) => device.createRenderPipeline({ layout: plScene, vertex: { module: mG, entryPoint: 'vs', buffers: vbLay },
-  fragment: { module: mG, entryPoint: entry, targets: ['rgba8unorm', HDR, 'rgba8unorm'].map((format) => ({ format, writeMask: mask })) },
-  primitive: { cullMode: 'none' }, depthStencil: { format: DEPTH, depthWriteEnabled: write, depthCompare: compare } });
-const pPre = LV > 1 && lowLeaf('fsPre', true, 'greater', 0), pLeafLow = LV > 1 && lowLeaf('fsLeafLow', false, 'equal', 15);
-const shPipe = (format, entry, cull) => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
-  fragment: entry ? { module: mSh, entryPoint: entry, targets: [] } : undefined, primitive: { cullMode: cull },
-  depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
-const shPipes = (f) => [shPipe(f, null, 'back'), shPipe(f, 'fsLeaf', 'none'), shPipe(f, 'fsCrystal', 'none'), shPipe(f, 'fsGlass', 'none')];
-const PREMUL = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
-const fxPipe = (entry, cull, write, blend) => device.createRenderPipeline({ layout: plFx, vertex: { module: mFx, entryPoint: 'vs', buffers: vbLay },
-  fragment: { module: mFx, entryPoint: entry, targets: [{ format: HDR, blend }] }, primitive: { cullMode: cull }, depthStencil: { format: DEPTH, depthWriteEnabled: write, depthCompare: 'greater' } });
-const pCrystal = fxPipe('fsCrystal', 'back', true), pWater = fxPipe('fsWater', 'none', true), pGlassB = fxPipe('fsGlass', 'front', false, PREMUL), pGlassF = fxPipe('fsGlass', 'back', false, PREMUL), pCascade = fxPipe('fsCascade', 'none', false, PREMUL);
+const gPipe = (cull) => device.createRenderPipeline({ layout: plScene, vertex: { module: mG, entryPoint: 'vs', buffers: vbLay },
+  fragment: { module: mG, entryPoint: 'fs', targets: ['rgba8unorm', HDR, 'rgba8unorm'].map((format) => ({ format, writeMask: 15 })) },
+  primitive: { cullMode: cull }, depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
+const pG = gPipe('back');
+const shPipe = (format) => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
+  primitive: { cullMode: 'back' }, depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
+const pWater = device.createRenderPipeline({ layout: plFx, vertex: { module: mFx, entryPoint: 'vs', buffers: vbLay },
+  fragment: { module: mFx, entryPoint: 'fsWater', targets: [{ format: HDR }] }, primitive: { cullMode: 'none' },
+  depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
 
 // shadow maps: three baked, one following the camera
 await ck('scene pipelines');
@@ -259,14 +244,15 @@ const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, 
 // the night profile's baked maps: allocated now (two sets fit), filled by the first switch to night
 const tShN = [tSh[0], tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
 const shReady = [false, false]; // per profile: its baked maps are valid (the camera cascade tSh[0] is shared)
-const pSh32 = CASC ? shPipes(DEPTH) : null, pSh16 = shPipes(D16), pShFar = SH32 ? pSh32 : pSh16, tTop = tex(TOPPX, TOPPX, 'r16float', RT, { mips: 8 });
+const pSh32 = CASC ? shPipe(DEPTH) : null, pSh16 = shPipe(D16), pShFar = SH32 ? pSh32 : pSh16, tTop = tex(TOPPX, TOPPX, 'r16float', RT, { mips: 8 });
 const depthPass = (t, clear = true) => ({ colorAttachments: [], depthStencilAttachment: { view: t.createView(), depthClearValue: 1, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store' } });
 const drawList = (r, v, list) => { for (let i = 0; i < list.length; i++) r.drawIndexedIndirect(bArgs[v], list[i] * 20); };
 const cullView = (c, v) => { c.setBindGroup(0, bgCull[v]); c.setPipeline(pReset); c.dispatchWorkgroups(NG_R); c.setPipeline(pCull); c.dispatchWorkgroups(NG_C); };
-// draw every caster into a depth map with the shadow view's matrix. Baked maps (half width R) are drawn as BAKEN x BAKEN
-// tiles, each waited for: phone GPUs bin a pass's triangles first and crash on millions. A, B: the map's world axes.
+// draw the solid casters into a depth map with the shadow view's matrix (water casts nothing; foliage, crystal and
+// glass casters were Atlantis scene furniture). Baked maps (half width R) are drawn as BAKEN x BAKEN tiles, each
+// waited for: phone GPUs bin a pass's triangles first and crash on millions. A, B: the map's world axes.
 const BAKEN = QL(1, mob ? 4 : 1, 4); // a phone on Medium needs tiles too
-const castInto = async (t, pipes, stat, R = 0, A = LR, B = LU) => {
+const castInto = async (t, pipe, R = 0, A = LR, B = LU) => {
   const n = R ? BAKEN : 1, U = UB[V_SH], sz = t.width / n;
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     if (n > 1) {
@@ -277,22 +263,20 @@ const castInto = async (t, pipes, stat, R = 0, A = LR, B = LU) => {
     const e = device.createCommandEncoder(), c = e.beginComputePass(); cullView(c, V_SH); c.end();
     const r = e.beginRenderPass(depthPass(t, i + j === 0)); r.setBindGroup(0, bgScene[V_SH]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
     if (n > 1) r.setScissorRect(sz * i, sz * (n - 1 - j), sz, sz);
-    r.setPipeline(pipes[0]); drawList(r, V_SH, LS[K.SOLID].cast); r.setPipeline(pipes[1]); drawList(r, V_SH, LS[K.LEAF].cast);
-    if (stat) { r.setPipeline(pipes[2]); drawList(r, V_SH, LS[K.CRYSTAL].cast); r.setPipeline(pipes[3]); drawList(r, V_SH, LS[K.GLASS].cast); }
-    r.end(); Q.submit([e.finish()]);
+    r.setPipeline(pipe); drawList(r, V_SH, LS[K.SOLID].cast); r.end(); Q.submit([e.finish()]);
     if (n > 1) await ck(`bake ${t.width} tile ${i},${j}`);
   }
 };
-// one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main/mirror
-// matrices alone, so the frames of the active profile stay right while the other profile fills its textures
+// one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main
+// matrix alone, so the frames of the active profile stay right while the other profile fills its textures
 const bakeShadowMaps = async (dst) => {
   const U = UB[V_SH]; U[O_MISC + 1] = 2; U[O_MISC + 2] = 0; U[O_MISC + 3] = 0; U[O_LODC] = 0; U[O_LODC + 1] = 0; U[O_LODC + 2] = 0;
   // each map draws only what lies inside its own box seen from the sun (planes set by shadowMat). Medium/Low never cast
   // at the finest LOD (lodb): a 23 cm texel can't tell them apart.
   U[O_LODB] = QL(0, mob ? 250 : 100, 250);
-  shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, true, 480); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castInto(dst[2], pShFar, true, 1400); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, true, 6800); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, 480); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castInto(dst[2], pShFar, 1400); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, 6800); await Q.onSubmittedWorkDone();
 };
 const tShT0 = performance.now();
 await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
@@ -302,7 +286,7 @@ if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${(
   // top-down height map for sky visibility: +-512 m, heights -60 .. 200 m (sun-independent: baked once)
   U.fill(0, 0, 16); U[0] = 1 / 512; U[9] = -1 / 512; U[6] = -1 / 260; U[14] = 200 / 260; U[15] = 1; U[O_MISC + 2] = 0;
   plane(U, 0, 1, 0, 0, 0, 0, 0, 512); plane(U, 1, -1, 0, 0, 0, 0, 0, 512); plane(U, 2, 0, 0, 1, 0, 0, 0, 512); plane(U, 3, 0, 0, -1, 0, 0, 0, 512);
-  const tT = tex(TOPPX, TOPPX, CASC ? DEPTH : D16, RT); await castInto(tT, pSh32 || pSh16, true, 512, [1, 0, 0], [0, 0, -1]);
+  const tT = tex(TOPPX, TOPPX, CASC ? DEPTH : D16, RT); await castInto(tT, pSh32 || pSh16, 512, [1, 0, 0], [0, 0, -1]);
   const lT = layout('d', SS.FRAGMENT), mT = mod(W_FS + /*wgsl*/`@group(0) @binding(0) var t: texture_depth_2d; @fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f { return vec4f(200. - 260. * textureLoad(t, vec2i(fc.xy), 0), 0., 0., 1.); }`, 'top');
   const e = device.createCommandEncoder(), r = e.beginRenderPass({ colorAttachments: [colorAtt(mipView(tTop, 0), true)] }); r.setPipeline(fsPipe(mT, lT, 'r16float')); r.setBindGroup(0, group(lT, [tT])); r.draw(3); r.end(); genMips(e, tTop);
   Q.submit([e.finish()]);
@@ -313,15 +297,17 @@ const passShadow = depthPass(tSh[0]);
 
 // full-screen passes
 // passes a level leaves out are never compiled
-const lLight = layout('usscttt' + 'dttkk' + 'dddd' + 'tttt', SS.FRAGMENT), lAO = layout('udtt', SS.FRAGMENT), lPolish = layout('ustdttk', SS.FRAGMENT), pPolish = POLISH && fsPipe(mod(W_POLISH, 'polish'), lPolish, HDR, 'fs', ADD), lVol = layout('ucddd', SS.FRAGMENT), pVol = SHAFTS && fsPipe(mod(W_VOL, 'vol'), lVol, 'rg16float'), lTAA = layout('ustt' + 'd', SS.FRAGMENT), lPost = layout('ustt', SS.FRAGMENT);
+const lLight = layout('usscttt' + 'dttkk' + 'dddd' + 'tttt', SS.FRAGMENT), lAO = layout('udtt', SS.FRAGMENT), lTAA = layout('ustt' + 'd', SS.FRAGMENT), lPost = layout('ustt', SS.FRAGMENT);
 const pLight = fsPipe(mod(W_LIGHT, 'light'), lLight, HDR), pAO = SSAO && fsPipe(mod(W_AO, 'ao'), lAO, 'rg16float'), pTAA = fsPipe(mod(W_TAA, 'taa'), lTAA, HDR), pPost = fsPipe(mod(W_POST, 'post'), lPost, FMT);
 // history stretched into a new resolution
 const pFit = device.createRenderPipeline({ layout: plOf(lBlit), vertex: { module: mBlit, entryPoint: 'vsFit' }, fragment: { module: mBlit, entryPoint: 'fsFit', targets: [{ format: HDR }] } });
-const tWhite = tex(1, 1, 'rg16float', RT | TU.COPY_DST), tDummyD = tex(1, 1, DEPTH, RT), tDummyC = tex(1, 1, HDR, RT);
+const tWhite = tex(1, 1, 'rg16float', RT | TU.COPY_DST);
 Q.writeTexture({ texture: tWhite }, new Uint16Array([0x3c00, 0x3c00]), {}, [1, 1]);
 
 // timing (GPU timestamp queries, one pair per stage)
-const PASSES = ['waves', 'cull', 'shadow', 'mirror', 'gbuffer', 'ao', 'light', 'transp', 'taa', 'bloom', 'post'], NP = PASSES.length;
+// PASSES was reindexed when the mirror view, god rays and polished-stone SSR were deleted: gbuffer 4->3, ao 5->4,
+// light 6->5, transp 7->6 (now the water pass alone), taa 8->7, bloom 9->8, post 10->9
+const PASSES = ['waves', 'cull', 'shadow', 'gbuffer', 'ao', 'light', 'transp', 'taa', 'bloom', 'post'], NP = PASSES.length;
 const gpuMs = new Float64Array(NP + 1); // per stage, then the whole frame
 let qs = null, qResolve = null; const qRead = [];
 if (hasTS) {
@@ -345,15 +331,14 @@ const tsB = (k) => (hasTS ? { querySet: qs, beginningOfPassWriteIndex: k * 2 } :
 const tsBE = (k) => (hasTS ? { querySet: qs, beginningOfPassWriteIndex: k * 2, endOfPassWriteIndex: k * 2 + 1 } : undefined);
 const passWaves = [0, 1, 2, 3, 4, 5].map((m) => ({ colorAttachments: [colorAtt(mipView(tWater, m), true)], timestampWrites: m === 0 ? tsB(0) : m === 5 ? tsE(0) : undefined }));
 const passCull = { timestampWrites: tsBE(1) };
-const passMirOff = { colorAttachments: [colorAtt(tDummyC.createView(), false)], timestampWrites: tsBE(3) }; // empty pass keeping the mirror stage's timing when the mirror is skipped
 passShadow.timestampWrites = tsBE(2);
 
 // render targets (rebuilt on resize)
 // drawn at up to `pix` pixels and stretched over the window; frame() adapts pix to hold 60 fps, starting where
 // the last visit left it. PIXTOP: a level's maximum.
-let W = 0, H = 0, MW = 0, MH = 0, DW = 0, DH = 0, targets = [], hist = null;
-let passG, passG2, passGm, passAO, passVol, bgVol, passPolish, bgPolish, passLight, passLightM, passX1, passX1b, passXm, passWater, passX2, passTAA = [], passPost, bloomPass = [], bloomBG = [];
-let bgLight, bgLightM, bgAO, bgFx, bgFxM, bgTAA = [], bgPost = [], cpA, cpB, cpD, cpDc, cpSize;
+let W = 0, H = 0, DW = 0, DH = 0, targets = [], hist = null;
+let passG, passAO, passLight, passWater, passTAA = [], passPost, bloomPass = [], bloomBG = [];
+let bgLight, bgAO, bgFx, bgTAA = [], bgPost = [], cpA, cpB, cpD, cpDc, cpSize;
 // one bind-group set per profile (0 day, 1 night); the toggle swaps the set, resize rebuilds both. The lets above
 // hold the ACTIVE profile's groups, assigned here and by setNight.
 const lightSets = [{}, {}];
@@ -370,46 +355,39 @@ function resize() {
   if (w === W && h === H) return;
   // the last frame's history survives briefly, to be stretched into the new one
   const old = hist && hist[(F[FRAME] + 1) & 1];
-  W = w; H = h; MW = W >> 1; MH = H >> 1; canvas.width = W; canvas.height = H;
+  W = w; H = h; canvas.width = W; canvas.height = H;
   ctx.configure({ device, format: FMT, alphaMode: 'opaque' });
   for (const t of targets) if (t !== old) t.destroy(); targets = [];
   const T = (w, h, f, u = RT) => { const t = tex(w, h, f, u); targets.push(t); return t; };
   const gset = (w, h) => [T(w, h, 'rgba8unorm'), T(w, h, HDR), T(w, h, 'rgba8unorm'), T(w, h, DEPTH, RT | TU.COPY_SRC)];
-  const g = gset(W, H), gm = MIRROR ? gset(MW, MH) : null;
+  const g = gset(W, H);
   const tA = T(W, H, HDR, RT | TU.COPY_SRC), tB = T(W, H, HDR, TU.TEXTURE_BINDING | TU.COPY_DST), tDc = T(W, H, DEPTH, TU.TEXTURE_BINDING | TU.COPY_DST);
-  const tMA = MIRROR ? T(MW, MH, HDR) : tDummyC, tAO = SSAO ? T(W >> 1, H >> 1, 'rg16float') : tWhite; hist = [T(W, H, HDR), T(W, H, HDR)];
+  const tAO = SSAO ? T(W >> 1, H >> 1, 'rg16float') : tWhite; hist = [T(W, H, HDR), T(W, H, HDR)];
   const gPass = (g, ts) => ({ colorAttachments: [colorAtt(g[0].createView(), true), colorAtt(g[1].createView(), true), colorAtt(g[2].createView(), true)],
     depthStencilAttachment: { view: g[3].createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'store' }, timestampWrites: ts });
   const cPass = (c, d, ts) => ({ colorAttachments: [colorAtt(c.createView(), false)], depthStencilAttachment: { view: d.createView(), depthLoadOp: 'load', depthStoreOp: 'store' }, timestampWrites: ts });
-  passG = gPass(g, LV > 1 ? tsB(4) : tsBE(4)); if (MIRROR) passGm = gPass(gm, tsB(3));
-  // Low: the G-buffer's second pass, loading what the first left (render())
-  passG2 = { colorAttachments: [0, 1, 2].map((i) => colorAtt(g[i].createView(), false)), depthStencilAttachment: { view: g[3].createView(), depthLoadOp: 'load', depthStoreOp: 'store' }, timestampWrites: tsE(4) };
-  const tVol = SHAFTS ? T(W >> 2, H >> 2, 'rg16float') : tWhite;
-  if (SSAO) { passAO = { colorAttachments: [colorAtt(tAO.createView(), true)], timestampWrites: SHAFTS ? tsB(5) : tsBE(5) }; bgAO = group(lAO, [ubo[V_MAIN], g[3], g[1], g[2]]); }
-  if (SHAFTS) passVol = { colorAttachments: [colorAtt(tVol.createView(), true)], timestampWrites: SSAO ? tsE(5) : tsBE(5) };
-  passLight = { colorAttachments: [colorAtt(tA.createView(), true)], timestampWrites: tsBE(6) }; if (MIRROR) passLightM = { colorAttachments: [colorAtt(tMA.createView(), true)] };
-  if (POLISH) passPolish = { colorAttachments: [colorAtt(tA.createView(), false)], timestampWrites: tsB(7) };
-  passX1 = cPass(tA, g[3], POLISH ? undefined : tsB(7)); passX1b = cPass(tA, g[3]); passWater = cPass(tA, g[3]); passX2 = cPass(tA, g[3], tsE(7)); if (MIRROR) passXm = cPass(tMA, gm[3], tsE(3));
+  passG = gPass(g, tsBE(3));
+  if (SSAO) { passAO = { colorAttachments: [colorAtt(tAO.createView(), true)], timestampWrites: tsBE(4) }; bgAO = group(lAO, [ubo[V_MAIN], g[3], g[1], g[2]]); }
+  passLight = { colorAttachments: [colorAtt(tA.createView(), true)], timestampWrites: tsBE(5) };
+  passWater = cPass(tA, g[3], tsBE(6));
   // lighting groups for both profiles: they differ only in the baked sky/env/shadow textures
   for (const n of [0, 1]) {
     const P = n ? { sky: tSkyN, env: cvEnvN, irr: cvIrrN, s1: tShN[1], s2: tShN[2], s3: tShN[3] } : { sky: tSky, env: cvEnv, irr: cvIrr, s1: tSh[1], s2: tSh[2], s3: tSh[3] };
-    const lightBG = (u, gg, ao, vol) => group(lLight, [u, sLin, sRep, sCmp, gg[0], gg[1], gg[2], gg[3], ao, P.sky, P.env, P.irr, tSh[0], P.s1, P.s2, P.s3, tWater, tNoiseA, tTop, vol]);
-    const fxBG = (sc, d, rf) => group(lFx, [sc, d, rf, P.sky, P.env, tSh[0], P.s1, P.s2, P.s3, tWater, sCmp]);
+    const lightBG = (u, gg, ao) => group(lLight, [u, sLin, sRep, sCmp, gg[0], gg[1], gg[2], gg[3], ao, P.sky, P.env, P.irr, tSh[0], P.s1, P.s2, P.s3, tWater, tNoiseA, tTop, tWhite]);
+    const fxBG = (sc, d) => group(lFx, [sc, d, P.sky, P.env, tSh[0], P.s1, P.s2, P.s3, tWater, sCmp]);
     const S = lightSets[n];
-    S.bgLight = lightBG(ubo[V_MAIN], g, tAO, tVol); if (MIRROR) S.bgLightM = lightBG(ubo[V_MIR], gm, tWhite, tWhite);
-    S.bgFx = fxBG(tB, tDc, tMA); if (MIRROR) S.bgFxM = fxBG(tDummyC, tDummyD, tDummyC);
-    if (SHAFTS) S.bgVol = group(lVol, [ubo[V_MAIN], sCmp, g[3], P.s1, P.s2]);
-    if (POLISH) S.bgPolish = group(lPolish, [ubo[V_MAIN], sLin, tB, tDc, g[1], g[2], P.env]);
+    S.bgLight = lightBG(ubo[V_MAIN], g, tAO);
+    S.bgFx = fxBG(tB, tDc);
   }
-  ({ bgLight, bgLightM, bgVol, bgPolish, bgFx, bgFxM } = lightSets[night]);
-  passTAA = [0, 1].map((i) => ({ colorAttachments: [colorAtt(hist[i].createView(), true)], timestampWrites: tsBE(8) }));
+  ({ bgLight, bgFx } = lightSets[night]);
+  passTAA = [0, 1].map((i) => ({ colorAttachments: [colorAtt(hist[i].createView(), true)], timestampWrites: tsBE(7) }));
   bgTAA = [0, 1].map((i) => group(lTAA, [ubo[V_MAIN], sLin, tA, hist[1 - i], g[3]]));
   const bl = []; for (let i = 0; i < NB; i++) bl.push(T(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR));
   // bloom: down hist -> b0 .. b5, then up additively to b0; one chain per history buffer
   bloomPass = []; bloomBG = [[], []];
-  for (let i = 0; i < NB; i++) { bloomPass.push({ colorAttachments: [colorAtt(bl[i].createView(), true)], timestampWrites: i === 0 ? tsB(9) : undefined }); for (const k of [0, 1]) bloomBG[k].push(blitBG(i ? bl[i - 1].createView() : hist[k].createView())); }
-  for (let i = NB - 1; i > 0; i--) { bloomPass.push({ colorAttachments: [colorAtt(bl[i - 1].createView(), false)], timestampWrites: i === 1 ? tsE(9) : undefined }); for (const k of [0, 1]) bloomBG[k].push(blitBG(bl[i].createView())); }
-  passPost = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }], timestampWrites: tsBE(10) };
+  for (let i = 0; i < NB; i++) { bloomPass.push({ colorAttachments: [colorAtt(bl[i].createView(), true)], timestampWrites: i === 0 ? tsB(8) : undefined }); for (const k of [0, 1]) bloomBG[k].push(blitBG(i ? bl[i - 1].createView() : hist[k].createView())); }
+  for (let i = NB - 1; i > 0; i--) { bloomPass.push({ colorAttachments: [colorAtt(bl[i - 1].createView(), false)], timestampWrites: i === 1 ? tsE(8) : undefined }); for (const k of [0, 1]) bloomBG[k].push(blitBG(bl[i].createView())); }
+  passPost = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }], timestampWrites: tsBE(9) };
   bgPost = [0, 1].map((i) => group(lPost, [ubo[V_MAIN], sLin, hist[i], bl[0]]));
   cpA = { texture: tA }; cpB = { texture: tB }; cpD = { texture: g[3] }; cpDc = { texture: tDc }; cpSize = [W, H];  // start a new size from the old picture: with no history every resolution change would flash
   if (old) {
@@ -473,7 +451,7 @@ const setNight = async (n) => {
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true);
   shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true);
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true);
-  ({ bgLight, bgLightM, bgVol, bgPolish, bgFx, bgFxM } = lightSets[n]);
+  ({ bgLight, bgFx } = lightSets[n]);
   F[RESET] = 1; // the TAA history is from the other profile
   if (!AUTO) { try { localStorage.atlasNight = n ? '1' : '0'; } catch {} }
   if (dnB) { dnB[0].className = n ? '' : 'on'; dnB[1].className = n ? 'on' : ''; }
@@ -488,34 +466,20 @@ for (let i = 0; i < 16; i++) { const h = (n, b) => { let f = 1, r = 0; while (n 
 const PVP = new Float32Array(16), submitList = [null];
 let hud = false;
 function render() {
-  const U = UB[V_MAIN], M = UB[V_MIR], S = UB[V_SH], fr = F[FRAME], t = F[TIME], par = fr & 1;
+  const U = UB[V_MAIN], S = UB[V_SH], fr = F[FRAME], t = F[TIME], par = fr & 1;
   const cx = F[CX], cy = F[CY], cz = F[CZ], j = (fr & 15) * 2;
   // unjittered first: that matrix is next frame's reprojection target
   setCam(U, cx, cy, cz, F[YAW], F[PIT], W, H, 0, 0);
   for (let i = 0; i < 16; i++) { U[32 + i] = PVP[i]; PVP[i] = U[i]; }
   setCam(U, cx, cy, cz, F[YAW], F[PIT], W, H, JIT[j] * 2 / W, JIT[j + 1] * 2 / H);
-  U[O_CAM + 3] = t; U[O_JIT + 2] = fr; U[O_JIT + 3] = -1e9;
-  // the Atlantis energy pulse is retired in the map app: static values park its rings infinitely far (x = 1e6) and
-  // zero the breathing, flare and mirror weight — otherwise the night city flashed violet every 12 s
-  U[O_PULSE] = 1e6; U[O_PULSE + 1] = 0; U[O_PULSE + 2] = 0; U[O_PULSE + 3] = 0;
+  U[O_CAM + 3] = t; U[O_JIT + 2] = fr;
   U[O_MISC] = F[RESET]; U[O_MISC + 1] = 0; U[O_MISC + 2] = LODK; U[O_MISC + 3] = 1; U[O_LODC] = cx; U[O_LODC + 1] = cy; U[O_LODC + 2] = cz; U[O_LODC + 3] = 1 / LODK;
-  // the canal mirror is off for good (quality.js); mir stays 0 and the mirror-view passes never run
-  let mir = MIRROR ? 1 - sstep(170, 235, cy) : 0;
-  for (let k = 0; k < 5; k++) { const o = O_PL + k * 4; if (U[o + 1] * WATER + U[o + 3] < -445) mir = 0; }
   if (CASC) {
     // cascade: a 92 m box around the point 36 m ahead of the camera
     shadowMat(O_SM, cx + U[O_FWD] * 36, cy + U[O_FWD + 1] * 36, cz + U[O_FWD + 2] * 36, 46, -420, 700, CASC, true);
     // casters switch LODs only a little sooner, or shadows pop on their own
     S[O_CAM + 3] = t; S[O_MISC + 1] = 2; S[O_MISC + 2] = 1.85 * LODK; S[O_MISC + 3] = 1; S[O_LODC] = cx; S[O_LODC + 1] = cy; S[O_LODC + 2] = cz;
     Q.writeBuffer(ubo[V_SH], 0, S);
-  }
-  if (MIRROR) {
-    // mirror camera: below the water plane, looking up
-    setCam(M, cx, 2 * WATER - cy, cz, F[YAW], -F[PIT], MW, MH, 0, 0);
-    M[O_CAM + 3] = t; M[O_JIT + 2] = fr; M[O_JIT + 3] = WATER - 0.05; for (let i = 0; i < 4; i++) M[O_PULSE + i] = U[O_PULSE + i];
-    // the rippled mirror gets by with lower LODs
-    M[O_MISC + 1] = 1; M[O_MISC + 2] = 3 * LODK; M[O_MISC + 3] = 1; M[O_LODC] = cx; M[O_LODC + 1] = cy; M[O_LODC + 2] = cz;
-    Q.writeBuffer(ubo[V_MIR], 0, M);
   }
   Q.writeBuffer(ubo[V_MAIN], 0, U);
   WT[0] = t; Q.writeBuffer(uboW, 0, WT);
@@ -526,58 +490,22 @@ function render() {
   if (tsOn || (dynOn && (fr & 7) === 0)) for (let i = 0; i < qRead.length; i++) if (!qRead[i].busy) { slot = qRead[i]; break; }
   let r = e.beginRenderPass(passWaves[0]); r.setPipeline(pWaves); r.setBindGroup(0, bgWaves); r.draw(3); r.end();
   for (let i = 1; i < 6; i++) { r = e.beginRenderPass(passWaves[i]); r.setPipeline(pMip[HDR]); r.setBindGroup(0, waterBG[i - 1]); r.draw(3); r.end(); }
-  // visibility and LOD for the three views
-  const c = e.beginComputePass(passCull); cullView(c, V_MAIN); if (mir > 0) cullView(c, V_MIR); if (CASC) cullView(c, V_SH); c.end();
+  // visibility and LOD for the two views
+  const c = e.beginComputePass(passCull); cullView(c, V_MAIN); if (CASC) cullView(c, V_SH); c.end();
   if (CASC) {
     r = e.beginRenderPass(passShadow); r.setBindGroup(0, bgScene[V_SH]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pSh32[0]); drawList(r, V_SH, LS[K.SOLID].near); r.setPipeline(pSh32[1]); drawList(r, V_SH, LS[K.LEAF].near); r.end();
+    r.setPipeline(pSh32); drawList(r, V_SH, LS[K.SOLID].near); r.end();
   }
-  // mirror view: G-buffer, lighting, crystal and glass
-  if (mir > 0) {
-    r = e.beginRenderPass(passGm); r.setBindGroup(0, bgScene[V_MIR]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pGm[0]); drawList(r, V_MIR, LS[K.SOLID].mir); drawLeaves(r, V_MIR, pGm, LS[K.LEAF].mir); r.setPipeline(pGm[0]); drawList(r, V_MIR, LS[K.SOLID].gndMir); r.end();
-    r = e.beginRenderPass(passLightM); r.setPipeline(pLight); r.setBindGroup(0, bgLightM); r.draw(3); r.end();
-    r = e.beginRenderPass(passXm); r.setBindGroup(0, bgScene[V_MIR]); r.setBindGroup(1, bgFxM); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pCrystal); drawList(r, V_MIR, LS[K.CRYSTAL].mir); r.setPipeline(pCascade); drawList(r, V_MIR, LS[K.CASCADE].mir);
-    r.setPipeline(pGlassB); drawList(r, V_MIR, LS[K.GLASS].mir); r.setPipeline(pGlassF); drawList(r, V_MIR, LS[K.GLASS].mir); r.end();
-  } else if (tsOn) { r = e.beginRenderPass(passMirOff); r.end(); }
-  // main view G-buffer: buildings and plants first, the ground they hide last
+  // main view G-buffer: buildings first, the ground they hide last
   r = e.beginRenderPass(passG); r.setBindGroup(0, bgScene[V_MAIN]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-  r.setPipeline(pG[0]); drawList(r, V_MAIN, LS[K.SOLID].all);
-  if (LV < 2) drawLeaves(r, V_MAIN, pG, LS[K.LEAF].all);
-  else {
-    // Low: leaf depth ends the first pass; colour and ground go in a second from the finished depth, so a phone GPU
-    // can reject hidden fragments early (Galaxy A16 garden: 44 ms -> 16 ms)
-    r.setPipeline(pPre); drawList(r, V_MAIN, LS[K.LEAF].all);
-    r.end(); r = e.beginRenderPass(passG2); r.setBindGroup(0, bgScene[V_MAIN]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pLeafLow); drawList(r, V_MAIN, LS[K.LEAF].all);
-  }
-  r.setPipeline(pG[0]); drawList(r, V_MAIN, LS[K.SOLID].gnd); r.end();
+  r.setPipeline(pG); drawList(r, V_MAIN, LS[K.SOLID].all);
+  r.setPipeline(pG); drawList(r, V_MAIN, LS[K.SOLID].gnd); r.end();
   if (SSAO) { r = e.beginRenderPass(passAO); r.setPipeline(pAO); r.setBindGroup(0, bgAO); r.draw(3); r.end(); }
-  if (SHAFTS) { r = e.beginRenderPass(passVol); r.setPipeline(pVol); r.setBindGroup(0, bgVol); r.draw(3); r.end(); }
   r = e.beginRenderPass(passLight); r.setPipeline(pLight); r.setBindGroup(0, bgLight); r.draw(3); r.end();
-  // crystal refracts the lit scene; thin crystal refracts scene + crystal (the great crystal shows through the lotus);
-  // water mirrors and refracts that; glass and cascades blend on top. Each step reads a copy of the picture so far.
+  // water refracts and reflects the lit scene: it reads copies of the picture and depth so far
   e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
-  if (POLISH) { r = e.beginRenderPass(passPolish); r.setPipeline(pPolish); r.setBindGroup(0, bgPolish); r.draw(3); r.end(); }
-  if (NX) { r = e.beginRenderPass(passX1); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pCrystal); drawList(r, V_MAIN, lsSolidX); r.end(); }
-  if (LV < 2) {
-    if (NX) { e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
-      r = e.beginRenderPass(passX1b); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-      r.setPipeline(pCrystal); drawList(r, V_MAIN, lsThinX); r.end(); }
-    e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
-    r = e.beginRenderPass(passWater); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pWater); drawList(r, V_MAIN, LS[K.WATER].all); r.end();
-    r = e.beginRenderPass(passX2); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-  } else {
-    // Low: the rest in one pass; on a phone every reload of the picture costs as much as drawing it
-    if (NX) e.copyTextureToTexture(cpA, cpB, cpSize);
-    r = e.beginRenderPass(passX2); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pCrystal); drawList(r, V_MAIN, lsThinX); r.setPipeline(pWater); drawList(r, V_MAIN, LS[K.WATER].all);
-  }
-  r.setPipeline(pCascade); drawList(r, V_MAIN, LS[K.CASCADE].all);
-  r.setPipeline(pGlassB); drawList(r, V_MAIN, LS[K.GLASS].all); r.setPipeline(pGlassF); drawList(r, V_MAIN, LS[K.GLASS].all); r.end();
+  r = e.beginRenderPass(passWater); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
+  r.setPipeline(pWater); drawList(r, V_MAIN, LS[K.WATER].all); r.end();
   // TAA into this frame's history, bloom from it, then tone mapping
   r = e.beginRenderPass(passTAA[par]); r.setPipeline(pTAA); r.setBindGroup(0, bgTAA[par]); r.draw(3); r.end();
   for (let i = 0; i < bloomPass.length; i++) { r = e.beginRenderPass(bloomPass[i]); r.setPipeline(i === 0 ? (night ? pDown0N : pDown0) : i < NB ? pDown : pUp); r.setBindGroup(0, bloomBG[par][i]); r.draw(3); r.end(); }

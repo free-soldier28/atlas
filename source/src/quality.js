@@ -31,21 +31,16 @@ else if (!AUTO) {
 }
 const QL = (h, m, l) => (LV > 1 ? l : LV ? m : h), LVN = ['High', 'Medium', 'Low'];
 // sun shadow map sizes: the camera cascade (0: none), then the baked city, shelf and mountain maps. 32-bit depth
-// where shafts march through them (16-bit gave bright rings around the low sun)
+// for the close cascade (16-bit gave bright rings around the low sun)
 const SHN = QL([2048, 8192, 4096, 2048], [1024, 4096, 2048, 1024], [0, 4096, 2048, 1024]), SH32 = LV < 2, CASC = SHN[0];
 // LODs switch this much sooner (far limits stay: see `cull` in sh_scene.js)
 const LODK = QL(1, 1.3, 2);
-// tree leaf cards: this much smaller (plants.js), and how much more of a card counts as leaf (fs in sh_scene.js)
-const LEAFK = QL(1, 1, 0.74), LEAFT = QL(0, 0, 0.1);
-// Low draws leaves in two steps that must agree on depth exactly (W_GBUF_LOW in sh_scene.js)
-const INV = LV > 1 ? '@invariant ' : '';
-// the sea's mesh: this many times coarser (meshSea, and the swell's fade in the vertex shader)
+// the sea swell's fade in the vertex shader and fsWater (the sea's mesh builder is gone; terrain packs bring it back)
 const SEAK = QL(1, 1, 2);
-// textures baked at load: leaf atlas tile, noise tiles, ground maps, sky-visibility map, wave tile
-const LEAFPX = QL(512, 512, 256), NOISEPX = QL(1024, 1024, 512), MAPPX = QL(2048, 2048, 1024), TOPPX = QL(2048, 1024, 1024), WAVEPX = QL(512, 512, 128);
+// textures baked at load: noise tiles, ground maps, sky-visibility map, wave tile
+const NOISEPX = QL(1024, 1024, 512), MAPPX = QL(2048, 2048, 1024), TOPPX = QL(2048, 1024, 1024), WAVEPX = QL(512, 512, 128);
 const TOPL = Math.log2(2048 / TOPPX); // mip levels the sky-visibility map is short of full size
-// per-frame passes: SSAO, bloom depth. The canal-mirror view, god rays and polished-stone SSR were Atlantis
-// scene furniture — off for good in the map app
-const MIRROR = 0, SSAO = LV < 2, SHAFTS = 0, POLISH = 0, NBLOOM = QL(6, 6, 4);
-// screen-space reflection march steps (Medium takes fewer, longer ones)
+// per-frame passes: SSAO, bloom depth. The Atlantis mirror view, god rays and polished-stone SSR are deleted
+const SSAO = LV < 2, NBLOOM = QL(6, 6, 4);
+// screen-space reflection march steps, water only (Medium takes fewer, longer ones)
 const SSRN = QL(22, 14, 14);

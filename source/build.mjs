@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { transformSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// concatenation order matters. globals before the sh_* files (they interpolate WATER/PULSE/SUN);
+// concatenation order matters. globals before the sh_* files (they interpolate WATER/SUN);
 // world builds the scene from the pack (format.js/loader.js) with citygen's building LODs, gps sits
 // with the loader, Atlantis's procedural modules are gone
 const FILES = ['math.js', 'quality.js', 'format.js', 'loader.js', 'gps.js', 'globals.js', 'sh_base.js', 'sh_scene.js', 'sh_light.js', 'sh_fx.js', 'citygen.js', 'world.js', 'collide.js', 'main.js'];

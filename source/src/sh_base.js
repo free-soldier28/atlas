@@ -46,21 +46,21 @@ fn h21(p: vec2f) -> f32 { var q = fract(vec3f(p.xyx) * .1031); q += dot(q, q.yzx
 fn h22(p: vec2f) -> vec2f { var q = fract(vec3f(p.xyx) * vec3f(.1031, .1030, .0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
 fn qrot(q: vec4f, v: vec3f) -> vec3f { return v + 2. * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 fn qmul(a: vec4f, b: vec4f) -> vec4f { return vec4f(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz)); } // b first, then a
-// one camera's view (main, mirror, shadow)
+// one camera's view (main, shadow)
 struct View {
   vp: mat4x4f, ivp: mat4x4f, pvp: mat4x4f,
   sm: array<mat4x4f, 4>, // camera cascade, then the three baked maps
   cam: vec4f, // position, time
   res: vec4f,   // width, height and their inverses
-  jit: vec4f, // sub-pixel jitter (ndc), frame number, clip height (mirror)
+  jit: vec4f, // sub-pixel jitter (ndc), frame number, w spare (was the mirror clip height)
   sun: vec4f,   // direction towards the sun
   sunc: vec4f, // sun illuminance at the ground, exposure
   right: vec4f, // right, tan(half fov x)
   up: vec4f, // up, tan(half fov y)
   fwd: vec4f, // forward, near plane
   planes: array<vec4f, 6>,
-  pulse: vec4f, // seconds since the pulse left, breathing (0-1), flare at the beat, mirror weight
-  misc: vec4f, // 1 = drop TAA history, view kind (0 main, 1 mirror, 2 shadow), lod scale, wind on/off
+  pulse: vec4f, // retired Atlantis pulse; nothing reads it, the field stays so the layout is unchanged
+  misc: vec4f, // 1 = drop TAA history, view kind (0 main, 1 shadow), lod scale, wind on/off
   lodc: vec4f, // LOD reference point; w: 1 / the level's distance scale
   lodb: vec4f, // x: minimum LOD distance (baked maps on Medium/Low: never the finest)
   night: vec4f, // x: 1 = the night profile (moon sun, stars, emissive windows, cool grade); yzw spare
@@ -69,80 +69,6 @@ struct View {
 // full-screen triangle
 const W_FS = /*wgsl*/`
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0., 1.); }
-`;
-
-// leaf atlas foliage (helpers, tile numbers and other tiles: fsLeaf below)
-// wall foliage (vines; tiles 6, 8, 9): dense carpets with a ragged outline short of the border, so overlapping cards merge
-const W_LEAF_WALL = /*wgsl*/`
-fn wallFoliage(tile: i32, p: vec2f) -> LA {
-  var c = LA(1., .8, 0., .5);
-  if (tile == 8) {
-    c = carpet(c, p, 230, 1., .085, .03);
-  } else if (tile == 9) { // blossom: the leaf carpet with five-petalled flowers
-    c = carpet(c, p, 170, 4., .09, .03);
-    for (var i = 0; i < 84; i++) {
-      let r = h22(vec2f(f32(i), 61.)); let s = spread(i, 84, r.x * 3.); let a = s.x; let o = vec2f(.5) + rot2(a) * s.y * lobe(a, 4.) + (r - .5) * .04; let q = p - o;
-      let R = .034 + .014 * h11(f32(i)); let d = length(q) - R * (.62 + .38 * abs(cos(2.5 * atan2(q.y, q.x) + r.x * 9.)));
-      c = over(c, d, .75 + .5 * sat(length(q) / R) - .3 * ss(.25, 0., length(q) / R), 1., r.y);
-    }
-  } else if (tile == 6) { // lower edge of a wall mass: a dense band of downward leaves on top, trailing stems below
-    for (var i = 0; i < 170; i++) {
-      let r = h22(vec2f(f32(i), 83.)); let o = vec2f(.07 + .86 * fract(f32(i) * .6180339 + .1), .4 + .53 * fract(f32(i) * .7548777 + .3));
-      if (o.y < .47 + .07 * sin(o.x * 11.) + .04 * sin(o.x * 23. + 1.)) { continue; }
-      let h = rot2(-1.571 + (r.x - .5) * 2.) * (.034 + .014 * r.y);
-      c = leaf(c, p, o - h, o + h, .029, (.55 + .45 * r.y) * (.75 + .5 * (o.y - .4)));
-    }
-    for (var k = 0; k < 9; k++) {
-      let rk = h22(vec2f(f32(k), 80.)); let x0 = .08 + .84 * (f32(k) + .25 + .5 * rk.x) / 9.; let y0 = .52 + .07 * sin(x0 * 11.); let ln = .14 + .34 * rk.y; let x1 = x0 + (rk.x - .5) * .05;
-      for (var i = 0; i < 8; i++) {
-        let t = (f32(i) + .5) / 8.; let r = h22(vec2f(f32(i), f32(k) + 90.)); let sd = f32(i & 1) * 2. - 1.;
-        let q = vec2f(mix(x0, x1, t), y0 - t * ln);
-        c = leaf(c, p, q, q + rot2(-1.571 + sd * (.9 + .45 * r.x)) * (.06 + .025 * r.y), .028, .6 + .4 * r.x);
-      }
-      c = put(c, seg(p, vec2f(x0, y0), vec2f(x1, y0 - ln)) - .0035, .45, 0., .5);
-    }
-  }
-  return c;
-}
-`;
-// crown foliage (olive 0, broad 1, pine 2, blossom 4): a 2x2 or 3x3 mosaic of one sprig out to the border; many
-// sparse overlapping cards read as a volume of small leaves with air in it
-const W_LEAF_CROWN = /*wgsl*/`
-fn sprigs(tile: i32, p0: vec2f) -> LA {
-  var c = LA(1., .8, 0., .5); var p = p0;
-  let few = tile == 0 || tile == 1 || tile == 4;
-  let q0 = p * select(2., 3., few); let cl = floor(q0) % 2.; p = fract(q0); if (cl.x > .5) { p.x = 1. - p.x; } if (cl.y > .5) { p.y = 1. - p.y; }
-  // each copy turned and shifted its own way, so sprigs never line up
-  if (few) { let hc = h22(floor(q0) + f32(tile) * 7.); let an = hc.x * 6.283; let d = p - .5; p = vec2f(d.x * cos(an) - d.y * sin(an), d.x * sin(an) + d.y * cos(an)) * (.8 + .25 * hc.y) + .5; }
-  p = p * .96 + .02;
-  if (tile == 0) { // olive: narrow paired leaves along a twig
-    for (var i = 0; i < 12; i++) {
-      let y = .06 + f32(i) * .075; let o = vec2f(.5 + .05 * sin(y * 5.), y); let r = h22(vec2f(f32(i), 1.));
-      c = leaf(c, p, o, o + rot2(.95 + r.x * .5) * (.2 + .07 * r.y), .028, .75 + .25 * r.x);
-      c = leaf(c, p, o + vec2f(0., .03), o + vec2f(0., .03) + rot2(PI - .95 - r.y * .5) * (.2 + .07 * r.x), .028, .75 + .25 * r.y);
-    }
-    c = put(c, seg(p, vec2f(.5, 0.), vec2f(.5 + .05 * sin(4.7), .93)) - .008, .45, 0., .5);
-  } else if (tile == 1) { // broad leaves: a loose cluster
-    for (var i = 0; i < 15; i++) {
-      let r = h22(vec2f(f32(i), 2.)); let r2 = h22(vec2f(f32(i), 5.)); let a = r.x * 6.283;
-      let o = vec2f(.5) + rot2(a) * (.05 + .2 * r.y);
-      c = leaf(c, p, o, o + rot2(a + (r2.x - .5) * 1.2) * (.2 + .1 * r2.y), .07 + .02 * r2.x, .65 + .35 * r2.y);
-    }
-  } else if (tile == 2) { // stone pine: fans of needles
-    for (var k = 0; k < 7; k++) {
-      let o = vec2f(.5) + (h22(vec2f(f32(k), 9.)) - .5) * .56; let ba = h21(vec2f(f32(k), 3.)) * 6.283;
-      for (var i = 0; i < 15; i++) { let r = h22(vec2f(f32(i), f32(k) + 20.)); c = put(c, seg(p, o, o + rot2(ba + (f32(i) / 15. - .5) * 2.6) * (.16 + .1 * r.x)) - .0055, .6 + .4 * r.y, 0., .5); }
-    }
-  } else if (tile == 4) { // blossom: five-petalled flowers over a few leaves
-    for (var i = 0; i < 6; i++) { let r = h22(vec2f(f32(i), 51.)); let a = r.x * 6.283; let o = vec2f(.5) + rot2(a) * .12; c = leaf(c, p, o, o + rot2(a) * (.26 + .08 * r.y), .06, .7); }
-    for (var i = 0; i < 19; i++) {
-      let r = h22(vec2f(f32(i), 61.)); let o = vec2f(.5) + rot2(r.x * 6.283) * sqrt(r.y) * .38; let q = p - o;
-      let R = .062 + .02 * h11(f32(i)); let d = length(q) - R * (.62 + .38 * abs(cos(2.5 * atan2(q.y, q.x) + r.x * 9.)));
-      c = put(c, d, .75 + .5 * sat(length(q) / R) - .3 * ss(.25, 0., length(q) / R), 1., .5);
-    }
-  }
-  return c;
-}
 `;
 
 // tiling detail textures (baked once)
@@ -183,75 +109,7 @@ fn hRock(uv: vec2f) -> f32 { let r = 1. - abs(2. * tf(uv, 5., 6) - 1.); let c = 
   let db = vec2f(hRock(uv + vec2f(e, 0.)) - b, hRock(uv + vec2f(0., e)) - b) * 40.;
   return vec4f(da * .5 + .5, db * .5 + .5);
 }
-
-// leaf atlas: 4 x 3 tiles. r shade, g petal (1) or leaf (0), b per-leaf random, a distance to the leaf edge (.5 on it,
-// ramped, so a threshold thins or fattens leaves). Tiles (LT in sh_scene.js): 0 olive, 1 broad, 2 pine, 3 cypress,
-// 4 blossom, 5 hydrangea, 7 lavender; vines: 6 trailing stems, 8 leaves, 9 blossom; 10, 11 empty.
-struct LA { d: f32, sh: f32, fl: f32, id: f32 }
-fn put(c: LA, d: f32, sh: f32, fl: f32, id: f32) -> LA { if (d < c.d) { return LA(d, sh, fl, id); } return c; }
-// a shape on top of what is there: petals over leaves
-fn over(c: LA, d: f32, sh: f32, fl: f32, id: f32) -> LA { if (d < 0.) { return LA(min(c.d, d), sh, fl, id); } return put(c, d, sh, fl, id); }
-// carpet root distance from the tile centre in direction a: a rounded square with bays; s picks the shape
-fn lobe(a: f32, s: f32) -> f32 {
-  let cs = vec2f(cos(a), sin(a)); let q = cs * cs;
-  return .44 * pow(dot(q, q), -.25) * (1. - .05 * (1. + sin(a * 3. + s)) - .03 * (1. + sin(a * 5. + s * 2.3)));
-}
-// point i of n spread evenly over a disc (sunflower spiral), nudged by j: (angle, share of radius)
-fn spread(i: i32, n: i32, j: f32) -> vec2f { return vec2f(f32(i) * 2.39996 + j * .7, sqrt((f32(i) + .5) / f32(n))); }
-// leaf from a to b, half width w: a pointed lens with a darker midrib
-fn leaf(c: LA, p: vec2f, a: vec2f, b: vec2f, w: f32, sh: f32) -> LA {
-  let ba = b - a; let l = length(ba); let dr = ba / l; let q = p - a;
-  let t = dot(q, dr) / l; let s = dot(q, vec2f(-dr.y, dr.x));
-  let wd = w * pow(sin(PI * pow(sat(t), .8)), .7);
-  let d = max(abs(s) - wd, max(-t, t - 1.) * l);
-  return put(c, d, sh * (.72 + .28 * ss(0., .35, abs(s) / w)) * (.85 + .3 * t), 0., h21(a * 53.7 + b * 17.3));
-}
-fn seg(p: vec2f, a: vec2f, b: vec2f) -> f32 { let pa = p - a; let ba = b - a; return length(pa - ba * sat(dot(pa, ba) / dot(ba, ba))); }
-fn rot2(a: f32) -> vec2f { return vec2f(cos(a), sin(a)); }
-// a carpet of n leaves (length ~ln, half width wd) on the spread, any way round; darker towards the middle
-fn carpet(c0: LA, p: vec2f, n: i32, sd: f32, ln: f32, wd: f32) -> LA {
-  var c = c0;
-  for (var i = 0; i < n; i++) {
-    let r = h22(vec2f(f32(i), sd)); let r2 = h22(vec2f(f32(i), sd + 3.)); let s = spread(i, n, r.x);
-    let o = vec2f(.5) + rot2(s.x) * s.y * lobe(s.x, sd); let h = rot2(r.y * 6.283) * ln * (.4 + .2 * r2.x);
-    c = leaf(c, p, o - h, o + h, wd * (.85 + .3 * r2.y), (.55 + .45 * r2.y) * (.8 + .2 * s.y));
-  }
-  return c;
-}
-@fragment fn fsLeaf(@builtin(position) fc: vec4f) -> @location(0) vec4f {
-  let g = fc.xy / ${LEAFPX}.; let tile = i32(g.x) + 4 * i32(g.y); var p = fract(g); p.y = 1. - p.y;
-  var c = LA(1., .8, 0., .5);
-  // vine tiles have a softer edge ramp
-  if (tile == 6 || tile >= 8) { c = wallFoliage(tile, p); return vec4f(c.sh, c.fl, c.id, sat(.5 - c.d * 60.)); }
-  // cypress: upright sprays, four mirrored copies per tile, around a solid core
-  if (tile == 3) { let q = p * 2.; let cl = floor(q) % 2.; p = fract(q); if (cl.x > .5) { p.x = 1. - p.x; } p = p * .96 + .02; }
-  if (tile == 3) { // cypress: dense sprays of scale leaves
-    for (var k = 0; k < 7; k++) {
-      let r0 = h22(vec2f(f32(k), 31.)); let o = vec2f(.14 + .12 * f32(k), .02 + .1 * r0.x); let top = o + vec2f((r0.y - .5) * .16, .72 + .22 * r0.x);
-      for (var i = 0; i < 11; i++) {
-        let t = f32(i) / 11.; let q = mix(o, top, t); let r = h22(vec2f(f32(i), f32(k) + 40.)); let sd = f32(i & 1) * 2. - 1.;
-        c = leaf(c, p, q, q + rot2(1.571 - sd * (.5 + .4 * r.x)) * (.13 + .06 * r.y) * (1.15 - t * .5), .034, .6 + .4 * r.x);
-      }
-      c = leaf(c, p, mix(o, top, .85), top + vec2f(0., .06), .03, .9);
-    }
-  } else if (tile == 5) { // hydrangea: round heads of florets
-    for (var i = 0; i < 7; i++) { let r = h22(vec2f(f32(i), 71.)); let a = r.x * 6.283; let o = vec2f(.5) + rot2(a) * .1; c = leaf(c, p, o, o + rot2(a) * (.3 + .1 * r.y), .085, .7); }
-    for (var k = 0; k < 4; k++) {
-      let o = vec2f(.5) + (h22(vec2f(f32(k), 77.)) - .5) * .42; let q = p - o; let R = .2 + .05 * h11(f32(k) + 3.);
-      let d = length(q) - R * (.92 + .08 * cos(11. * atan2(q.y, q.x)));
-      let cell = tw(q + 3., 26.); c = put(c, d, (.72 + .4 * ss(.0, .5, cell.x)) * (1.08 - .35 * length(q) / R), 1., f32(k) * .25);
-    }
-  } else if (tile == 7) { // lavender: flower spikes over thin blades
-    for (var k = 0; k < 11; k++) {
-      let r = h22(vec2f(f32(k), 101.)); let o = vec2f(.3 + .4 * r.x, 0.); let top = vec2f(.08 + .084 * f32(k), .62 + .34 * r.y);
-      c = put(c, seg(p, o, top) - .006, .55, 0., r.x);
-      for (var i = 0; i < 9; i++) { let q = mix(o, top, .62 + .042 * f32(i)); c = put(c, length(p - q - vec2f(.012 * (f32(i & 1) * 2. - 1.), 0.)) - .017, .8 + .3 * h11(f32(i * 7 + k)), 1., r.y); }
-      c = leaf(c, p, o, o + rot2(1.571 + (r.x - .5) * 1.4) * (.3 + .15 * r.y), .014, .7);
-    }
-  } else { c = sprigs(tile, p); }
-  return vec4f(c.sh, c.fl, c.id, sat(.5 - c.d * 180.));
-}
-` + W_LEAF_CROWN + W_LEAF_WALL;
+`;
 
 // sky table (baked once per profile: the sun never moves within a profile)
 // clear-sky radiance per unit sun illuminance: u = azimuth from the sun, v = elevation (denser near the horizon).
@@ -396,7 +254,7 @@ fn ham(i: u32, n: u32) -> vec2f { return vec2f(f32(i) / f32(n), f32(reverseBits(
 `;
 
 // blits: mips and the bloom chain. blt: the first bloom step's threshold — day 0 (today's soft knee), night one
-// high enough that only emissives (windows, the moon, the pulse) clear it. main.js builds two modules from this.
+// high enough that only emissives (windows, the moon) clear it. main.js builds two modules from this.
 const W_BLIT = (blt) => W_FS + /*wgsl*/`
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;

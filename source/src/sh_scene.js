@@ -1,8 +1,6 @@
 // shaders 2/4: instancing, GPU culling, materials (G-buffer) and shadow casters
 // material ids, shared by mesh generators and shaders
-const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17, LEAF: 32 };
-// leaf atlas tiles (material = M.LEAF + tile): crowns, then vines (TRAIL fringe, VLEAF / VBLOSSOM carpets)
-const LT = { OLIVE: 0, BROAD: 1, PINE: 2, CYPRESS: 3, BLOSSOM: 4, HYDRANGEA: 5, TRAIL: 6, LAVENDER: 7, VLEAF: 8, VBLOSSOM: 9 };
+const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17 };
 
 // per view, a compute pass frustum-tests each instance, picks its LOD and appends it to that mesh's list, drawn with one
 // indirect draw per mesh
@@ -54,21 +52,12 @@ const W_SCENE_VS = W_COMMON + W_INST + /*wgsl*/`
 @group(0) @binding(4) var<storage, read> vis: array<u32>;
 @group(0) @binding(5) var tNoiseA: texture_2d<f32>;
 @group(0) @binding(6) var tNoiseN: texture_2d<f32>;
-@group(0) @binding(7) var tLeaf: texture_2d<f32>;
-@group(0) @binding(8) var tMap: texture_2d<f32>;
-@group(0) @binding(9) var tLand: texture_2d<f32>;
+@group(0) @binding(7) var tMap: texture_2d<f32>;
+@group(0) @binding(8) var tLand: texture_2d<f32>;
 struct VI { @location(0) pos: vec3f, @location(1) nrm: vec4f, @location(2) ext: vec4f, @builtin(instance_index) ii: u32 }
 struct VO {
-  ${INV}@builtin(position) clip: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) uv: vec3f, @location(3) ao: f32,
-  @location(4) tint: vec4f, @location(5) @interpolate(flat) mi: vec2u, @location(6) lp: vec3f, @location(7) @interpolate(flat) q: vec4f, @location(8) @interpolate(flat) sc: vec4f,
-}
-// gentle west breeze: plants lean in slow waves that travel across the city
-fn sway(wp: vec3f, h: f32, ph: f32, leaf: bool) -> vec3f {
-  let t = view.cam.w; let g = dot(wp.xz, vec2f(.05, .021)) - t * .55;
-  let b = sq(min(abs(h), 22.) / 13.) * (.16 + .13 * sin(g) + .06 * sin(g * 2.3 + 1.7));
-  var o = vec3f(b * .94, -b * b * .04, b * .34);
-  if (leaf) { let f = sin(t * 2.6 + ph * 43. + wp.x * .9 + wp.z * .7) * .022 * sat(abs(h) * .4); o += vec3f(f, f * .6, -f * .7); }
-  return o * view.misc.w;
+  @builtin(position) clip: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) uv: vec3f, @location(3) ao: f32,
+  @location(4) tint: vec4f, @location(5) @interpolate(flat) mi: vec2u, @location(6) lp: vec3f, @location(7) @interpolate(flat) q: vec4f,
 }
 // sea swell: four trains from the south-west (xy wave vector, z height, w angular speed), each faded where the mesh
 // (vertex) or pixel (fragment) can't resolve it. Returns height and slope.
@@ -83,19 +72,13 @@ fn transform(v: VI) -> VO {
   let mat = u32(v.ext.x * 255. + .5);
   let s = vec3f(it.p.w, it.p.w * it.sy, it.p.w);
   let lp = v.pos * s;
-  var q = it.q; var org = it.p.xyz;
-  if (mat == 0u && v.ext.w > .99) {
-    // podium crystals hover and turn on their own slow clocks (misc.w = 0 while baking shadows: middle height)
-    let ph = org.x * .37 + org.z * .61; let t = view.cam.w * view.misc.w; let h = (t * .11 + ph) * .5;
-    org.y += .85 + .5 * sin(t * .8 + ph) * view.misc.w; q = qmul(q, vec4f(0., sin(h), 0., cos(h)));
-  }
-  var wp = org + qrot(q, lp);
+  let q = it.q;
+  var wp = it.p.xyz + qrot(q, lp);
   if (mat == 17u) {
     // the sea's rings follow the camera; each train fades where the rings get too coarse
     wp = vec3f(lp.x + view.lodc.x, 0., lp.z + view.lodc.z);
     wp.y = seaWave(wp.xz, clamp(vec4f(2.) - length(lp.xz) * ${((SEA_GROW - 1) * SEAK).toFixed(4)} * vec4f(.1765, .2857, .4615, .75), vec4f(0.), vec4f(1.))).x;
   }
-  if (mat == 7u || mat == 11u || mat >= 32u) { wp += sway(wp, lp.y, v.ext.w, mat >= 32u); }
   var n = qrot(q, v.nrm.xyz / s);
   if (mat == 8u) {
     // hovering craft loop around the rings; moored ones only bob
@@ -105,43 +88,20 @@ fn transform(v: VI) -> VO {
   }
   var o: VO;
   o.clip = view.vp * vec4f(wp, 1.); o.wp = wp; o.n = n; o.uv = v.ext.yzw; o.ao = v.nrm.w;
-  o.tint = unpack4x8unorm(it.tint); o.mi = vec2u(mat, e >> 24u); o.lp = v.pos; o.q = q; o.sc = vec4f(s, it.rad);
+  o.tint = unpack4x8unorm(it.tint); o.mi = vec2u(mat, e >> 24u); o.lp = v.pos; o.q = q;
   // Low: LODs swap at mid-fade instead of dissolving; the hidden one collapses to a point here, so no fragment shader
   // needs a discard (phone GPUs only reject hidden fragments early for shaders that never discard)
   if (LV > 1) { if (((e >> 24u) & 127u) < 64u) { o.clip = vec4f(2., 2., 2., 1.); } o.mi.y = 127u; }
   return o;
 }
 @vertex fn vs(v: VI) -> VO { return transform(v); }
-// is this a vine tile (foliage lying on a surface)?
-fn onWall(tile: u32) -> bool { return tile == 6u || tile >= 8u; }
-// how much of a leaf card counts at uv: crowns fade over the outer quarter, vines all but a thin margin
-fn cardRim(uv: vec2f, tile: u32) -> f32 { let q = abs(uv - .5) * 2.; return 1. - ss(select(.72, .95, onWall(tile)), 1., max(q.x, q.y)); }
-// card uv in the atlas (4 x 3 tiles with a thin margin)
-fn atlasUV(tile: u32, uv: vec2f) -> vec2f { return (vec2f(f32(tile % 4u), f32(tile / 4u)) + uv * .98 + .01) / vec2f(4., 3.); }
 `;
 
-// shadow casters (depth only)
-const W_SHADOW = W_SCENE_VS + /*wgsl*/`
-// foliage casts by coverage: the atlas is read near the mip matching the shadow texel, so the cutout becomes the
-// sprig's soft shape and doesn't crawl in the wind
-@fragment fn fsLeaf(i: VO) {
-  let tile = max(i.mi.x, 32u) - 32u;
-  // mip chosen by hand for one trilinear tap (the shared sampler is anisotropic, wasted here)
-  let lv = max(log2(max(length(dpdx(i.uv.xy)), length(dpdy(i.uv.xy))) * ${502 * LEAFPX / 512}.) - .7, 0.);
-  let a = textureSampleLevel(tLeaf, sLin, atlasUV(tile, i.uv.xy), lv).a * cardRim(i.uv.xy, tile);
-  if (i.mi.x >= 32u && a < select(.27, .36, onWall(tile))) { discard; }
-  // LOD cross-fade with the G-buffer's dither, fixed to map texels so the filter blends it
-  let fb = i.mi.y;
-  if ((fb & 127u) != 127u) { let f = f32(fb & 127u) / 127.; let d = fract(dot(floor(i.clip.xy), vec2f(.7548777, .5698403))); if ((fb & 128u) != 0u) { if (d < 1. - f) { discard; } } else if (d >= f) { discard; } }
-}
-// crystal and glass cast a checkerboard the soft filter turns into a pale shadow
-@fragment fn fsCrystal(i: VO) { let p = vec2u(i.clip.xy); if (((p.x + p.y) & 1u) == 0u) { discard; } }
-@fragment fn fsGlass(i: VO) { let p = vec2u(i.clip.xy); if ((p.x & 1u) + (p.y & 1u) != 0u) { discard; } }
-`;
+// shadow casters (depth only): the vertex stage. Foliage, crystal and glass casters were Atlantis scene furniture.
+const W_SHADOW = W_SCENE_VS;
 
 // materials: fills the G-buffer
 const W_GBUF =W_SCENE_VS + /*wgsl*/`
-override REFL = false; // the mirror view drops everything below the water
 struct GO { @location(0) a: vec4f, @location(1) n: vec4f, @location(2) m: vec4f }
 struct Mt { alb: vec3f, rough: f32, metal: f32, inlay: f32, nb: vec3f, trans: f32 }
 // triplanar noise: seamless on any wall, detail fades with the mips
@@ -286,47 +246,18 @@ fn terrain(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f, tv: vec3f) -> Mt {
   if (h < .3) { let dk = ss(.3, -.4, h); o.alb *= mix(1., .62, dk); o.rough = mix(o.rough, .3, dk * ss(-.5, .3, h)); o.alb = mix(o.alb, vec3f(.05, .09, .05), ss(.5, .75, L.g * .5 + A.r) * ss(-.5, -3., h) * .8); }
   return o;
 }
-const FLOWERS = array<vec3f, 8>(vec3f(.52, .08, .24), vec3f(.8, .36, .5), vec3f(.42, .3, .66), vec3f(.26, .32, .66), vec3f(.7, .68, .62), vec3f(.6, .12, .34), vec3f(.52, .4, .72), vec3f(.84, .5, .58));
 @fragment fn fs(i: VO) -> GO {
   // all derivatives first, while control flow is uniform
   let p = i.wp; let dx = dpdx(p); let dy = dpdy(p); let fw = max(length(dx), length(dy));
   var N = normalize(i.n); let mat = i.mi.x; let w = triW(N);
   let dnx = dpdx(N); let dny = dpdy(N);
-  let tile = max(mat, 32u) - 32u; let luv = atlasUV(tile, i.uv.xy);
-  // lux, luy: card uv per pixel in quarter tiles; lg converts to the atlas (three tiles high); lq keeps the cutout
-  // distance rule tuned for a 2:1 atlas
+  // pane uv gradients: the window branch's curtain edge softness
   let uvx = dpdx(i.uv.xy); let uvy = dpdy(i.uv.xy);
-  let lux = uvx * .245; let luy = uvy * .245; let lq = vec2f(1., 2.); let lg = vec2f(1., 4. / 3.);
   let px = i.clip.xy; let fb = i.mi.y; let nz = ign(px + view.jit.z * 5.588);
   if ((fb & 127u) != 127u) { let f = f32(fb & 127u) / 127.; if ((fb & 128u) != 0u) { if (nz < 1. - f) { discard; } } else if (nz >= f) { discard; } }
-  if (REFL && i.wp.y < view.jit.w) { discard; }
   var o: Mt; o.metal = 0.; o.inlay = 0.; o.trans = 0.; o.nb = vec3f(0.); o.rough = .5; o.alb = vec3f(.8);
   var ao = i.ao; var glass = 0.;
-  if (mat >= 32u) {
-    // leaves: crisp atlas cutout (TAA smooths the edges), threshold dropping with distance so far crowns keep density.
-    // Nothing may depend on view angle: edge-on fades made whole sprays vanish.
-    let c = textureSampleGrad(tLeaf, sLin, luv, lux * lg, luy * lg);
-    let v = i.uv.z; let tn = i.tint.rgb * i.tint.rgb; var petal: vec3f;
-    if (onWall(tile)) {
-      // vine; the distance rule takes the finer screen direction (a slanted card is not a far one)
-      let lod = max(0., .5 * log2(min(dot(lux * lq, lux * lq), dot(luy * lq, luy * lq)) * 4194304.));
-      if (c.a * cardRim(i.uv.xy, tile) < .5 - .05 * min(lod, 4.)) { discard; }
-      // tone and tilt per leaf (atlas b), not per card, or dense cards show as flat plates
-      o.alb = tn * (.4 + .9 * c.r) * mix(vec3f(1.16, 1.05, .78), vec3f(.8, .94, 1.03), c.b) * (.92 + .16 * fract(v * 7.31));
-      petal = FLOWERS[u32(i.tint.a * 255. + .5) & 7u] * (.75 + .6 * c.r) * (.82 + .36 * c.b); o.rough = .42;
-      // the plant's normal gives volume; each leaf tips out of the card plane its own way, so sun and sheen pick out leaves
-      let gl = cross(dx, dy); var gn = gl * inverseSqrt(max(dot(gl, gl), 1e-24)); if (dot(gn, N) < 0.) { gn = -gn; }
-      let t1 = normalize(cross(gn, vec3f(.31, .9, .29)) + vec3f(1e-4, 0., 0.)); let t2 = cross(gn, t1); let la = c.b * 25.;
-      o.nb = -(.2 * gn + .34 * (t1 * cos(la) + t2 * sin(la)));
-    } else {
-      // crown: one tone per card, shaded with the crown's normal
-      let lod = max(0., .5 * log2(max(dot(lux * lq, lux * lq), dot(luy * lq, luy * lq)) * 4194304.));
-      if (c.a * cardRim(i.uv.xy, tile) < .5 - .05 * min(lod, 4.) - ${LEAFT}) { discard; }
-      o.alb = tn * (.55 + .75 * c.r) * mix(vec3f(1.12, 1.03, .85), vec3f(.85, .97, 1.02), v);
-      petal = FLOWERS[u32(i.tint.a * 255. + .5) & 7u] * (.75 + .6 * c.r) * (.85 + .3 * v); o.rough = .5;
-    }
-    if (c.g > .5) { o.alb = petal; o.trans = .4; } else { o.trans = .75; }
-  } else if (mat == 0u || mat == 4u || mat == 9u) {
+  if (mat == 0u || mat == 4u || mat == 9u) {
     // marble: honed walls in courses, smooth trim, quay walls with a waterline
     let m = marble(p, dx, dy, w, vec3f(0.));
     o.alb = MARB * m.rgb; o.rough = select(.47, .3, mat == 9u) + .12 * (m.a - .5); o.nb = triN(p, dx, dy, w, 2.3, false) * .06;
@@ -356,7 +287,7 @@ const FLOWERS = array<vec3f, 8>(vec3f(.52, .08, .24), vec3f(.8, .36, .5), vec3f(
   else if (mat == 2u) {
     let A = tri(tNoiseA, p, dx, dy, w, .33); let B = tri(tNoiseA, p, dx, dy, w, 3.1);
     o.alb = mix(vec3f(.79, .76, .7), i.tint.rgb, .55) * (1. - .08 * (A.r - .5) - .05 * (B.a - .5)); o.rough = .78; o.nb = triN(p, dx, dy, w, 3.3, false) * .2;
-  } else if (mat == 3u) { o.alb = vec3f(.86, .6, .22); o.metal = 1.; o.rough = .33; o.inlay = .14; } // gold answers the pulse a little
+  } else if (mat == 3u) { o.alb = vec3f(.86, .6, .22); o.metal = 1.; o.rough = .33; o.inlay = .14; } // gold
   else if (mat == 5u) {
     let g = p.xz / 1.5; let f = min(fract(g), 1. - fract(g)) * 1.5; let A = tri(tNoiseA, p, dx, dy, w, .31); let B = tri(tNoiseA, p, dx, dy, w, 1.7);
     // canal floor slabs barely differ, or their grid shows through the water
@@ -434,53 +365,7 @@ const FLOWERS = array<vec3f, 8>(vec3f(.52, .08, .24), vec3f(.8, .36, .5), vec3f(
   var g: GO; g.a = vec4f(sqrt(sat3(o.alb)), o.inlay); g.n = vec4f(N, max(rough, .045)); g.m = vec4f(ao, o.metal, o.trans, glass);
   return g;
 }
-// depth-only pass for plants (High/Medium), then fs runs with depth "equal", so the material is shaded once per
-// pixel, not per card layer. EVERY discard in fs reachable by a plant must be mirrored here exactly (LOD dither, mirror
-// clip, leaf cutout), or there are holes.
-@fragment fn fsDepth(i: VO) {
-  let mat = i.mi.x; let tile = max(mat, 32u) - 32u; let luv = atlasUV(tile, i.uv.xy);
-  let uvx = dpdx(i.uv.xy); let uvy = dpdy(i.uv.xy);
-  let lux = uvx * .245; let luy = uvy * .245; let lq = vec2f(1., 2.); let lg = vec2f(1., 4. / 3.);
-  let px = i.clip.xy; let fb = i.mi.y; let nz = ign(px + view.jit.z * 5.588);
-  if ((fb & 127u) != 127u) { let f = f32(fb & 127u) / 127.; if ((fb & 128u) != 0u) { if (nz < 1. - f) { discard; } } else if (nz >= f) { discard; } }
-  if (REFL && i.wp.y < view.jit.w) { discard; }
-  if (mat >= 32u) {
-    let c = textureSampleGrad(tLeaf, sLin, luv, lux * lg, luy * lg);
-    if (onWall(tile)) {
-      let lod = max(0., .5 * log2(min(dot(lux * lq, lux * lq), dot(luy * lq, luy * lq)) * 4194304.));
-      if (c.a * cardRim(i.uv.xy, tile) < .5 - .05 * min(lod, 4.)) { discard; }
-    } else {
-      let lod = max(0., .5 * log2(max(dot(lux * lq, lux * lq), dot(luy * lq, luy * lq)) * 4194304.));
-      if (c.a * cardRim(i.uv.xy, tile) < .5 - .05 * min(lod, 4.) - ${LEAFT}) { discard; }
-    }
-  }
-}
 `;
-// Low (phones): tile GPUs only skip hidden fragments for shaders without discard. So all discards are stripped (LODs
-// hard-switch in the vertex stage, streams lose ragged edges, no mirror), and leaves are drawn twice: depth cut out by
-// fsPre, then colour where the depth is theirs by fsLeafLow (plainer, never discards). Both must agree on depth exactly:
-// the invariant position (INV in quality.js).
-const W_GBUF_LOW = W_GBUF.replace(/discard;/g, '') + /*wgsl*/`
-@fragment fn fsPre(i: VO) {
-  let tile = max(i.mi.x, 32u) - 32u; let uvx = dpdx(i.uv.xy) * .245; let uvy = dpdy(i.uv.xy) * .245; let lq = vec2f(1., 2.);
-  let c = textureSample(tLeaf, sLin, atlasUV(tile, i.uv.xy));
-  if (i.mi.x >= 32u) {
-    let wall = onWall(tile); let ex = dot(uvx * lq, uvx * lq); let ey = dot(uvy * lq, uvy * lq);
-    let lod = max(0., .5 * log2(select(max(ex, ey), min(ex, ey), wall) * 4194304.));
-    if (c.a * cardRim(i.uv.xy, tile) < .5 - .05 * min(lod, 4.) - select(${LEAFT}, 0., wall)) { discard; }
-  }
-}
-@fragment fn fsLeafLow(i: VO) -> GO {
-  let mat = i.mi.x; let tile = max(mat, 32u) - 32u; let c = textureSample(tLeaf, sLin, atlasUV(tile, i.uv.xy));
-  let tn = i.tint.rgb * i.tint.rgb; let v = i.uv.z; var alb = tn * .22; var rough = .9; var trans = .2;
-  if (mat == 7u) { alb = vec3f(.19, .16, .125) * (.5 + .5 * i.tint.g); trans = 0.; }
-  else if (mat >= 32u) {
-    var petal: vec3f; trans = .75;
-    if (onWall(tile)) { alb = tn * (.4 + .9 * c.r) * mix(vec3f(1.16, 1.05, .78), vec3f(.8, .94, 1.03), c.b) * (.92 + .16 * fract(v * 7.31)); petal = FLOWERS[u32(i.tint.a * 255. + .5) & 7u] * (.75 + .6 * c.r) * (.82 + .36 * c.b); rough = .42; }
-    else { alb = tn * (.55 + .75 * c.r) * mix(vec3f(1.12, 1.03, .85), vec3f(.85, .97, 1.02), v); petal = FLOWERS[u32(i.tint.a * 255. + .5) & 7u] * (.75 + .6 * c.r) * (.85 + .3 * v); rough = .5; }
-    if (c.g > .5) { alb = petal; trans = .4; }
-  }
-  var g: GO; g.a = vec4f(sqrt(sat3(alb)), 0.); g.n = vec4f(normalize(i.n), rough); g.m = vec4f(i.ao, 0., trans, 0.);
-  return g;
-}
-`;
+// Low (phones): tile GPUs only skip hidden fragments for shaders without discard. All discards are stripped (LODs
+// hard-switch in the vertex stage; streams lose their ragged edges).
+const W_GBUF_LOW = W_GBUF.replace(/discard;/g, '');
