@@ -7,12 +7,17 @@ import { transformSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // concatenation order matters
-const FILES = ['math.js', 'quality.js', 'layout.js', 'sh_base.js', 'sh_scene.js', 'sh_light.js', 'sh_fx.js', 'meshes.js', 'plants.js', 'city.js', 'world.js', 'collide.js', 'main.js', 'music.js'];
+const FILES = ['math.js', 'quality.js', 'format.js', 'loader.js', 'layout.js', 'sh_base.js', 'sh_scene.js', 'sh_light.js', 'sh_fx.js', 'meshes.js', 'plants.js', 'city.js', 'world.js', 'collide.js', 'main.js', 'music.js'];
 const dev = process.argv.includes('--dev'), readable = dev || process.argv.includes('--readable'), unpacked = process.argv.includes('--unpacked');
 const out = dev ? 'dev.html' : 'index.html';
 if (dev) FILES.push('dev.js');
 
 let js = FILES.map((f) => readFileSync(path.join(here, 'src', f), 'utf8')).join('\n');
+// embed a map pack so the page also works from file:// (--pack=packs/grodno.mpk; default packs/embed.mpk)
+const packArg = process.argv.find((a) => a.startsWith('--pack='));
+const packFile = path.join(here, '..', packArg ? packArg.slice(7) : 'packs/embed.mpk');
+try { js = js.replace('/*PACK*/null', () => `"${readFileSync(packFile).toString('base64')}"`); } catch { if (packArg) failPack(packFile); }
+function failPack(f) { throw new Error(`--pack=${f}: file not found`); }
 const tpl = readFileSync(path.join(here, 'template.html'), 'utf8');
 // everything runs inside one async function; startup errors are shown on screen
 const wrap = (body) => `(async()=>{${body}\n})().catch(e=>{console.error(e);window.__err=e.message;document.body.className='l e';document.getElementById('s').textContent=(e.cause?'':'Failed to start: ')+e.message});`;
