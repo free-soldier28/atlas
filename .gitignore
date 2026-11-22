@@ -1,0 +1,4 @@
+node_modules/
+pipeline/cache/
+packs/embed.mpk
+*.log
