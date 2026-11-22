@@ -17,7 +17,7 @@ const max2 = (a, b) => (a > b ? a : b);
 
 export class MPKBuilder {
   constructor(o) {
-    this.h = { v: 1, id: o.id, name: o.name, attribution: o.attribution || '© OpenStreetMap contributors',
+    this.h = { v: 2, id: o.id, name: o.name, attribution: o.attribution || '© OpenStreetMap contributors',
       origin: o.origin, tileSize: o.tileSize || 512, bbox: o.bbox, strings: [], tiles: [], graph: null, terrain: null,
       poses: o.poses || null, fly: o.fly || null };
     this.blobs = [];
@@ -32,7 +32,7 @@ export class MPKBuilder {
       for (const L of layers) {
         w.u8(L.kind); w.u32(L.recs.length);
         for (const r of L.recs) {
-          if (L.kind === 1) { w.u16(r.pts.length / 2); w.u8(r.bkind | 0); w.u8(r.roof | 0); w.i16(r.h10 | 0); w.i16(r.base10 | 0); for (const v of r.pts) w.i32(v); }
+          if (L.kind === 1) { w.u16(r.pts.length / 2); w.u8(r.bkind | 0); w.u8(r.roof | 0); w.i16(r.h10 | 0); w.i16(r.base10 | 0); w.u32(r.osmId | 0); w.u8(r.src | 0); for (const v of r.pts) w.i32(v); }
           else if (L.kind === 2) { w.u8(r.cls); w.u8(r.flags | 0); w.u16(this.str(r.name)); w.u8(r.lanes | 0); w.i16(r.w10 | 0); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); }
           else if (L.kind === 3 || L.kind === 4) { w.u8(r.kind); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); }
           else if (L.kind === 5) { w.u8(r.cell); w.u8(Math.sqrt(r.h.length)); for (const v of r.h) w.i16(v); }

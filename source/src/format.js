@@ -5,7 +5,7 @@ function mpkOpen(u8) {
   if (dv.getUint32(0, true) !== 0x314b504d) throw new Error('not an MPK file');
   const hLen = dv.getUint32(4, true);
   const h = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hLen)));
-  if (h.v !== 1) throw new Error(`MPK v${h.v} unsupported (want 1)`);
+  if (h.v !== 1 && h.v !== 2) throw new Error(`MPK v${h.v} unsupported (want 1 or 2)`);
   return { h, u8, dv, tiles: new Map() };
 }
 const mpkInflate = async (b) => new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
@@ -32,8 +32,10 @@ async function mpkTile(P, i) {
       for (let r = 0; r < n; r++) {
         if (kind === 1) {
           const nPts = u16(), bkind = u8v(), roof = u8v(), h10 = i16(), base10 = i16();
+          let osmId = 0, src = 0;
+          if (P.h.v >= 2) { osmId = u32(); src = u8v(); } // v1 packs have no provenance
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();
-          recs.push({ pts, bkind, roof, h10, base10 });
+          recs.push({ pts, bkind, roof, h10, base10, osmId, src });
         } else if (kind === 2) {
           const cls = u8v(), flags = u8v(), name = u16(), lanes = u8v(), w10 = i16(), nPts = u16();
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();

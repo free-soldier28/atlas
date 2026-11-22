@@ -1,0 +1,297 @@
+{
+ "pack": "packs/grodno.mpk",
+ "summary": {
+  "buildings": 35932,
+  "hsrc": [
+   20753,
+   15092,
+   87
+  ],
+  "roofKnown": 2975,
+  "colourKnown": 431,
+  "fromRelation": 74,
+  "floorsReal": 0
+ },
+ "candidates": [
+  {
+   "id": 29129450,
+   "url": "https://www.openstreetmap.org/way/29129450",
+   "areaM2": 773.04,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 488688060,
+   "url": "https://www.openstreetmap.org/way/488688060",
+   "areaM2": 412.91,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 194874011,
+   "url": "https://www.openstreetmap.org/way/194874011",
+   "areaM2": 379.72,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29129451,
+   "url": "https://www.openstreetmap.org/way/29129451",
+   "areaM2": 371.51,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 514773746,
+   "url": "https://www.openstreetmap.org/way/514773746",
+   "areaM2": 352.54,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29129453,
+   "url": "https://www.openstreetmap.org/way/29129453",
+   "areaM2": 311.46,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29129452,
+   "url": "https://www.openstreetmap.org/way/29129452",
+   "areaM2": 310.82,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29129444,
+   "url": "https://www.openstreetmap.org/way/29129444",
+   "areaM2": 298.21,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 194809964,
+   "url": "https://www.openstreetmap.org/way/194809964",
+   "areaM2": 259.86,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 54585104,
+   "url": "https://www.openstreetmap.org/way/54585104",
+   "areaM2": 245.24,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 41418949,
+   "url": "https://www.openstreetmap.org/way/41418949",
+   "areaM2": 198.78,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29129447,
+   "url": "https://www.openstreetmap.org/way/29129447",
+   "areaM2": 190.65,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 504868192,
+   "url": "https://www.openstreetmap.org/way/504868192",
+   "areaM2": 165.71,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 227384063,
+   "url": "https://www.openstreetmap.org/way/227384063",
+   "areaM2": 162.71,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 229447658,
+   "url": "https://www.openstreetmap.org/way/229447658",
+   "areaM2": 157.19,
+   "kind": 3,
+   "heightM": 9
+  },
+  {
+   "id": 1056524739,
+   "url": "https://www.openstreetmap.org/way/1056524739",
+   "areaM2": 148.41,
+   "kind": 6,
+   "heightM": 9
+  },
+  {
+   "id": 29128793,
+   "url": "https://www.openstreetmap.org/way/29128793",
+   "areaM2": 144.62,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29127022,
+   "url": "https://www.openstreetmap.org/way/29127022",
+   "areaM2": 141.51,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29126976,
+   "url": "https://www.openstreetmap.org/way/29126976",
+   "areaM2": 138.29,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 478467419,
+   "url": "https://www.openstreetmap.org/way/478467419",
+   "areaM2": 131.82,
+   "kind": 3,
+   "heightM": 9
+  },
+  {
+   "id": 227384070,
+   "url": "https://www.openstreetmap.org/way/227384070",
+   "areaM2": 122.97,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 1102960426,
+   "url": "https://www.openstreetmap.org/way/1102960426",
+   "areaM2": 116.3,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29127237,
+   "url": "https://www.openstreetmap.org/way/29127237",
+   "areaM2": 116.07,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29128794,
+   "url": "https://www.openstreetmap.org/way/29128794",
+   "areaM2": 115.31,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29127236,
+   "url": "https://www.openstreetmap.org/way/29127236",
+   "areaM2": 112.04,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29128301,
+   "url": "https://www.openstreetmap.org/way/29128301",
+   "areaM2": 111.37,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 142698910,
+   "url": "https://www.openstreetmap.org/way/142698910",
+   "areaM2": 110.1,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29127238,
+   "url": "https://www.openstreetmap.org/way/29127238",
+   "areaM2": 106.1,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 512276088,
+   "url": "https://www.openstreetmap.org/way/512276088",
+   "areaM2": 105.68,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 41418946,
+   "url": "https://www.openstreetmap.org/way/41418946",
+   "areaM2": 103.72,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29128676,
+   "url": "https://www.openstreetmap.org/way/29128676",
+   "areaM2": 102.92,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 398603720,
+   "url": "https://www.openstreetmap.org/way/398603720",
+   "areaM2": 101.94,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 29128797,
+   "url": "https://www.openstreetmap.org/way/29128797",
+   "areaM2": 99,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 29126939,
+   "url": "https://www.openstreetmap.org/way/29126939",
+   "areaM2": 94.63,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 497630774,
+   "url": "https://www.openstreetmap.org/way/497630774",
+   "areaM2": 94.29,
+   "kind": 7,
+   "heightM": 9
+  },
+  {
+   "id": 1305531288,
+   "url": "https://www.openstreetmap.org/way/1305531288",
+   "areaM2": 89.65,
+   "kind": 3,
+   "heightM": 9
+  },
+  {
+   "id": 142685092,
+   "url": "https://www.openstreetmap.org/way/142685092",
+   "areaM2": 88.44,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 52360110,
+   "url": "https://www.openstreetmap.org/way/52360110",
+   "areaM2": 85.09,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 142439075,
+   "url": "https://www.openstreetmap.org/way/142439075",
+   "areaM2": 84.64,
+   "kind": 4,
+   "heightM": 9
+  },
+  {
+   "id": 223767624,
+   "url": "https://www.openstreetmap.org/way/223767624",
+   "areaM2": 83.62,
+   "kind": 4,
+   "heightM": 9
+  }
+ ]
+}

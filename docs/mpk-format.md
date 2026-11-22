@@ -1,9 +1,11 @@
-# MPK v1 — map pack format
+# MPK v2 — map pack format
 
 The contract between the data pipeline (`pipeline/`) and the engine (`source/src/`).
 One `.mpk` file = one pack (a city, a country layer, a synthetic test world).
 Encoder reference: `pipeline/lib/pack.mjs`. Decoder reference: `source/src/format.js`.
 **Changing this file requires changing both references and bumping `v` in the header.**
+v1→v2: building records gained `osmId` (u32) and `src` (u8 provenance bits); the decoder
+still reads v1 (fields default to 0) so old packs load until rebuilt.
 
 ## File layout
 
@@ -18,7 +20,7 @@ then          tile / graph / terrain blobs, back to back, at absolute offsets
 
 ```jsonc
 {
-  "v": 1,                  // format version
+  "v": 2,                  // format version
   "id": "grodno",          // stable pack id (file name, ?city= value)
   "name": "Гродно",         // display name
   "attribution": "© OpenStreetMap contributors",
@@ -56,9 +58,13 @@ per LOD:
     u8  kind                  // 1 buildings, 2 roads, 3 water, 4 green, 5 terrainPatch
     u32 nRec
     per record, by kind:
-      buildings: u16 nPts, u8 bkind, u8 roof, i16 h10, i16 base10, i32 pts[nPts*2]
+      buildings: u16 nPts, u8 bkind, u8 roof, i16 h10, i16 base10, u32 osmId, u8 src, i32 pts[nPts*2]
                  // h10: roof top above ground in 0.1 m; base10: base above ground;
-                 // bkind: building type code; roof: 0 flat, 1 gable, 2 hip (rendered flat in v1)
+                 // bkind: building type code; roof: 0 flat, 1 gable, 2 hip (rendered flat in v1);
+                 // osmId: OSM way/relation id — the improvement loop's address of this building;
+                 // src provenance bits: 0-1 height source (0 prior/default estimate, 1 levels×3.2,
+                 //   2 real height tag), 2 roof:shape tagged, 3 colour tagged, 4 osmId is a relation,
+                 //   5-7 reserved — the analysis tools read these (pipeline/report.mjs)
       roads:     u8 cls, u8 flags, u16 name, u8 lanes, i16 w10, u16 nPts, i32 pts[nPts*2]
                  // cls: 0 motorway,1 trunk,2 primary,3 secondary,4 tertiary,5 residential,
                  //      6 unclassified/living,7 service,8 pedestrian,9 footway,10 path;

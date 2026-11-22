@@ -17,7 +17,7 @@ const HARD = 40000 * 100;      // 40 km: projection-bug net (defense in depth)
 
 test('grodno.mpk: header, tiles present', async () => {
   const P = await openPack(false);
-  assert.equal(P.h.v, 1);
+  assert.equal(P.h.v, 2);
   assert.equal(P.h.id, 'grodno');
   assert.deepEqual(P.h.origin, ORIGIN);
   assert.deepEqual(P.h.bbox, BBOX);

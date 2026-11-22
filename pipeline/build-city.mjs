@@ -32,11 +32,11 @@ const PRIOR = { garages: 3, garage: 3, shed: 2.5, hut: 2.5, house: 6, detached: 
 
 function buildingHeight(tags) {
   const b = (tags.building || '').toLowerCase(), church = CHURCHY.has(b);
-  let h = NaN;
-  if (tags.height !== undefined) h = num(tags.height);
+  let h = NaN, src = 0; // src: 0 prior/default, 1 levels-based, 2 height-tagged (provenance, see docs)
+  if (tags.height !== undefined) { h = num(tags.height); if (!isNaN(h)) src = 2; }
   if (isNaN(h) && tags['building:levels'] !== undefined) {
     const lv = num(tags['building:levels']);
-    if (!isNaN(lv)) h = lv * (LEVELS_TALL.has(b) ? 3.6 : 3.2); // residential default for the rest (incl. building=yes)
+    if (!isNaN(lv)) { h = lv * (LEVELS_TALL.has(b) ? 3.6 : 3.2); src = 1; } // residential default for the rest (incl. building=yes)
   }
   if (isNaN(h)) h = PRIOR[b] ?? 9;
   if (church) { // min 15 m walls; a shaped roof adds height on top of the minimum
@@ -44,7 +44,7 @@ function buildingHeight(tags) {
     if (h < 15) h = 15 + (shaped ? 4 : 0);
     else if (shaped && h === 15) h += 4;
   }
-  return Math.min(church ? 80 : 60, Math.max(2.5, h)); // clamp 2.5–60 m (churches to 80)
+  return { h: Math.min(church ? 80 : 60, Math.max(2.5, h)), src }; // clamp 2.5–60 m (churches to 80)
 }
 
 function bkind(tags) {
@@ -60,9 +60,12 @@ function bkind(tags) {
 }
 const roofCode = (t) => (t === 'gabled' ? 1 : t === 'hipped' ? 2 : 0);    // 0 flat
 
-const buildingRec = (tags) => { // base can never sit above the roof top
-  const h10 = Math.round(buildingHeight(tags) * 10);
-  return { bkind: bkind(tags), roof: roofCode(tags['roof:shape']), h10, base10: Math.min(base10Of(tags), h10) };
+// src bits: 0-1 height source (0 prior/default, 1 levels, 2 height tag), 2 roof:shape tagged, 3 colour tagged,
+// 4 from a relation (osmId is a relation id), 5-7 reserved — the provenance the report/analysis tools read
+const buildingRec = (tags, id = 0, rel = false) => { // base can never sit above the roof top
+  const H = buildingHeight(tags), h10 = Math.round(H.h * 10);
+  const src = (H.src & 3) | (tags['roof:shape'] ? 4 : 0) | ((tags['building:colour'] ?? tags.colour) !== undefined ? 8 : 0) | (rel ? 16 : 0);
+  return { bkind: bkind(tags), roof: roofCode(tags['roof:shape']), h10, base10: Math.min(base10Of(tags), h10), osmId: id | 0, src };
 };
 
 function base10Of(tags) {
@@ -199,7 +202,7 @@ for (const el of buildingsEls) {
   emittedWayIds.add(el.id);
   const pts = ringPts(g);
   if (!pts || pts.length < 6) continue;
-  for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags));
+  for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags, el.id, el.type === 'relation'));
 }
 stats.relBuildings = buildingsEls.filter((e) => e.type === 'relation').length;
 // building multipolygon relations: v1 = outer rings only, inner rings (holes) dropped
@@ -214,7 +217,7 @@ for (const el of buildingsEls) {
     stats.relOuterRings++;
     const pts = ringPts(m.geometry);
     if (!pts || pts.length < 6) continue;
-    for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags));
+    for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags, el.id, el.type === 'relation'));
   }
 }
 
