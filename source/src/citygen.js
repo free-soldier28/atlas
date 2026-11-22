@@ -141,16 +141,37 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
     H.push({ X: hx, Z: hz, n: m });
   }
   const storeys = max(1, round(h / 3.2)), ground = storeys > 1 ? min(4, h * 0.55) : h, upper = storeys > 1 ? (h - ground) / (storeys - 1) : 1;
-  // roof cap: ridge along the longer bbox side through the bbox centre; too low stays flat
-  const axX = x1 - x0 >= z1 - z0, pc = axX ? (z0 + z1) / 2 : (x0 + x1) / 2, halfP = (axX ? z1 - z0 : x1 - x0) / 2;
-  const rdX = axX ? 1 : 0, rdZ = axX ? 0 : 1;
-  let amin = 1e9, amax = -1e9;
-  for (let i = 0; i < n; i++) { const a = axX ? X[i] : Z[i]; amin = min(amin, a); amax = max(amax, a); }
   let roof = r.roof === 1 || r.roof === 2 ? r.roof : 0, rise = 0;
-  // caps only on small plain footprints: big/industrial roofs are flat in reality, and a gabled
-  // cap over a holey complex would bridge the courtyards
+  // caps only on small CONVEX plain footprints: big/industrial roofs are flat in reality, a gabled
+  // cap over a holey complex would bridge the courtyards, and one over a notched ring spans the
+  // notch — slope planes up to 50 m long in the Grodno pack (the "giant roof" artifact)
   if (roof && (area > 4000 || H.length)) roof = 0;
-  if (roof) { rise = max(0.15, min(clamp((roof === 1 ? 0.58 : 0.5) * halfP, 0.5, 3.4), h - 2.2)); if (rise < 0.15) roof = 0; }
+  // ridge direction: the longest wall edge (the bbox long side lied for rotated footprints — a 45°
+  // house got its ridge across the walls). rx / rz: ridge unit vector; pd: ridge perpendicular;
+  // pc: the ridge line's perpendicular offset; amin / amax: the ring's extent along the ridge;
+  // halfP: the widest point's distance from the ridge line (drives the rise)
+  let rx = 1, rz = 0, pc = 0, amin = 0, amax = 0, halfP = 0;
+  if (roof) {
+    let cpos = 0, cneg = 0;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n, k = (i + 2) % n;
+      const cr = (X[j] - X[i]) * (Z[k] - Z[i]) - (Z[j] - Z[i]) * (X[k] - X[i]);
+      if (cr > 1e-9) cpos++; else if (cr < -1e-9) cneg++; }
+    if (cpos && cneg) roof = 0;
+  }
+  if (roof) {
+    let bl = 0;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n, ex = X[j] - X[i], ez = Z[j] - Z[i], el = ex * ex + ez * ez;
+      if (el > bl) { bl = el; const il = 1 / max(sqrt(el), 1e-9); rx = ex * il; rz = ez * il; } }
+    const pdx = -rz, pdz = rx;
+    let sq = 0;
+    amin = 1e9; amax = -1e9;
+    for (let i = 0; i < n; i++) { const a = X[i] * rx + Z[i] * rz, q = X[i] * pdx + Z[i] * pdz;
+      sq += q; amin = min(amin, a); amax = max(amax, a); }
+    pc = sq / n; // vertex-mean perpendicular offset: every wall is then within halfP of the ridge
+    for (let i = 0; i < n; i++) halfP = max(halfP, abs(X[i] * pdx + Z[i] * pdz - pc));
+    rise = max(0.15, min(clamp((roof === 1 ? 0.58 : 0.5) * halfP, 0.5, 3.4), h - 2.2));
+    if (rise < 0.15) roof = 0;
+  }
   const eaves = roof ? top - rise : top;
   // walls near stop at the eaves, so their storey rhythm shrinks with it
   const hW = eaves - base, storeysN = roof ? max(1, round(hW / 3.2)) : storeys;
@@ -222,11 +243,11 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
     for (const f of F2) wquad(b, f, 0, f.L, c1, top + 0.34, 0.06, 0.95);
   }
   // gable ends rise from the eaves to the ridge on the wall mesh
+  const along = (x, z) => x * rx + z * rz, ridge = (a) => [rx * a - rz * pc, top, rz * a + rx * pc];
   if (roof === 1) for (const f of F) {
-    if (abs(f.tx * rdX + f.tz * rdZ) > 0.82) continue;
+    if (abs(f.tx * rx + f.tz * rz) > 0.82) continue;
     const p0 = fp(f, 0, eaves, 0), p1 = fp(f, f.L, eaves, 0);
-    const am = clamp(axX ? (p0[0] + p1[0]) / 2 : (p0[2] + p1[2]) / 2, amin, amax);
-    const ap = axX ? [am, top, pc] : [pc, top, am];
+    const ap = ridge(clamp(along((p0[0] + p1[0]) / 2, (p0[2] + p1[2]) / 2), amin, amax));
     b.mat = M.PLASTER;
     b.tri(b.v(p0[0], p0[1], p0[2], f.nx, 0, f.nz, 1), b.v(p1[0], p1[1], p1[2], f.nx, 0, f.nz, 1), b.v(ap[0], ap[1], ap[2], f.nx, 0, f.nz, 1));
   }
@@ -234,21 +255,20 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   // roof near: caps over the footprint for gable / hip, ear-clip top for flat
   if (roof) {
     rb.n.mat = M.ROCK;
+    const pdx = -rz, pdz = rx;
     for (const f of F) {
-      const par = abs(f.tx * rdX + f.tz * rdZ) > 0.82;
+      const par = abs(f.tx * rx + f.tz * rz) > 0.82;
       if (!par && roof === 1) continue; // gable ends are wall triangles, done above
       const p0 = fp(f, 0, eaves, 0), p1 = fp(f, f.L, eaves, 0);
-      const run = abs((axX ? (p0[2] + p1[2]) / 2 : (p0[0] + p1[0]) / 2) - pc);
+      const run = abs((p0[0] + p1[0]) / 2 * pdx + (p0[2] + p1[2]) / 2 * pdz - pc);
       if (run < 0.05) continue;
       const nl = hypot(f.nx * rise, run, f.nz * rise), N = [f.nx * rise / nl, run / nl, f.nz * rise / nl];
       const V = (p) => rb.n.v(p[0], p[1], p[2], N[0], N[1], N[2], 1);
-      const am = clamp(axX ? (p0[0] + p1[0]) / 2 : (p0[2] + p1[2]) / 2, amin, amax);
       if (par) {
-        const a0 = clamp(axX ? p0[0] : p0[2], amin, amax), a1 = clamp(axX ? p1[0] : p1[2], amin, amax);
-        const r0 = axX ? [a0, top, pc] : [pc, top, a0], r1 = axX ? [a1, top, pc] : [pc, top, a1];
+        const r0 = ridge(clamp(along(p0[0], p0[2]), amin, amax)), r1 = ridge(clamp(along(p1[0], p1[2]), amin, amax));
         rb.n.quad(V(p0), V(p1), V(r1), V(r0));
       } else {
-        const ap = axX ? [am, top, pc] : [pc, top, am];
+        const ap = ridge(clamp(along((p0[0] + p1[0]) / 2, (p0[2] + p1[2]) / 2), amin, amax));
         rb.n.tri(V(p0), V(p1), V(ap));
       }
     }

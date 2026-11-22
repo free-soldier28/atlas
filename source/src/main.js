@@ -459,6 +459,7 @@ const setNight = async (n) => {
   if (AUTO) console.log(`profile: ${n ? 'night' : 'day'} · sun ${ACTIVE_SUN.map((v) => v.toFixed(2))} · sunc ${(n ? SUNCN : SUNC).map((v) => v.toFixed(3))} · expo ${n ? EXPO_N : EXPO}`);
 };
 window.__night = (n) => setNight(n === undefined ? 1 - night : n); // headless tests / console
+window.__dbg = () => ({ dead, rebake, hud, night, hidden: document.hidden, lv: LV }); // visual probes: why the frame loop idles
 
 // frame
 const JIT = new Float32Array(32); // Halton (2, 3) sub-pixel offsets
@@ -618,6 +619,13 @@ const setDrawer = (o) => {
   body.className = o ? 'w' : document.pointerLockElement ? 'p' : '';
 };
 window.__drawer = (o) => setDrawer(o === undefined ? !open : !!o); // headless tests
+window.__cam = (lat, lon, y, yawDeg = 0, pitchDeg = -40) => { // headless visual probes: hover over a geodetic point, look along yaw / pitch; returns the camera state
+  const g = geodeticToLocal(lat, lon), w = yawDeg * DEG, p = pitchDeg * DEG;
+  const dx = sin(w) * cos(p), dy = sin(p), dz = -cos(w) * cos(p);
+  lookAt(g[0], y, g[1], g[0] + dx * 150, y + dy * 150, g[1] + dz * 150);
+  F[VX] = F[VY] = F[VZ] = 0;
+  return [F[CX], F[CY], F[CZ], F[YAW] / DEG, F[PIT] / DEG];
+};
 $('st').onclick = () => setDrawer(!open);
 $('hs').onclick = () => setHud(!hud);
 $('hb').onclick = () => setHud(!hud);
