@@ -44,7 +44,8 @@ const SEAK = QL(1, 1, 2);
 // textures baked at load: leaf atlas tile, noise tiles, ground maps, sky-visibility map, wave tile
 const LEAFPX = QL(512, 512, 256), NOISEPX = QL(1024, 1024, 512), MAPPX = QL(2048, 2048, 1024), TOPPX = QL(2048, 1024, 1024), WAVEPX = QL(512, 512, 128);
 const TOPL = Math.log2(2048 / TOPPX); // mip levels the sky-visibility map is short of full size
-// per-frame passes: canal mirror, SSAO, light shafts, polished-stone reflections, bloom depth
-const MIRROR = LV < 2, SSAO = LV < 2, SHAFTS = LV < 2, POLISH = LV < 2, NBLOOM = QL(6, 6, 4);
+// per-frame passes: SSAO, bloom depth. The canal-mirror view, god rays and polished-stone SSR were Atlantis
+// scene furniture — off for good in the map app
+const MIRROR = 0, SSAO = LV < 2, SHAFTS = 0, POLISH = 0, NBLOOM = QL(6, 6, 4);
 // screen-space reflection march steps (Medium takes fewer, longer ones)
 const SSRN = QL(22, 14, 14);

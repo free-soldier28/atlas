@@ -207,6 +207,7 @@ const listOf = (kind, skip = 0, need = 0) => new Uint32Array(slots.map((s, i) =>
 const LS = [K.SOLID, K.LEAF, K.CRYSTAL, K.GLASS, K.WATER, K.CASCADE].map((k) => ({ all: listOf(k, DRAW_LAST), mir: listOf(k, NO_MIRROR | DRAW_LAST), gnd: listOf(k, 0, DRAW_LAST), gndMir: listOf(k, NO_MIRROR, DRAW_LAST), near: listOf(k, NO_NEAR | NO_SHADOW), cast: listOf(k, NO_SHADOW | NO_BAKE) }));
 // main-view crystal in two steps: solid bodies, then the thin petals and panels
 const lsSolidX = listOf(K.CRYSTAL, THIN), lsThinX = listOf(K.CRYSTAL, 0, THIN);
+const NX = lsSolidX.length + lsThinX.length; // a map pack registers no crystal: skip the crystal steps (and their per-frame scene copies) when empty
 const tMap = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 const tLand = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 // ground maps are painted at 1 m/texel; Low uploads them at half size (mean of four)
@@ -560,20 +561,19 @@ function render() {
   // water mirrors and refracts that; glass and cascades blend on top. Each step reads a copy of the picture so far.
   e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
   if (POLISH) { r = e.beginRenderPass(passPolish); r.setPipeline(pPolish); r.setBindGroup(0, bgPolish); r.draw(3); r.end(); }
-  r = e.beginRenderPass(passX1); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-  r.setPipeline(pCrystal); drawList(r, V_MAIN, lsSolidX); r.end();
+  if (NX) { r = e.beginRenderPass(passX1); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
+    r.setPipeline(pCrystal); drawList(r, V_MAIN, lsSolidX); r.end(); }
   if (LV < 2) {
-    e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
-    r = e.beginRenderPass(passX1b); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-    r.setPipeline(pCrystal); drawList(r, V_MAIN, lsThinX); r.end();
+    if (NX) { e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
+      r = e.beginRenderPass(passX1b); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
+      r.setPipeline(pCrystal); drawList(r, V_MAIN, lsThinX); r.end(); }
     e.copyTextureToTexture(cpA, cpB, cpSize); e.copyTextureToTexture(cpD, cpDc, cpSize);
     r = e.beginRenderPass(passWater); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
     r.setPipeline(pWater); drawList(r, V_MAIN, LS[K.WATER].all); r.end();
     r = e.beginRenderPass(passX2); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
   } else {
-    // Low: one more copy (so the lotus shows the crystal), then the rest in one pass; on a phone every reload of the
-    // picture costs as much as drawing it
-    e.copyTextureToTexture(cpA, cpB, cpSize);
+    // Low: the rest in one pass; on a phone every reload of the picture costs as much as drawing it
+    if (NX) e.copyTextureToTexture(cpA, cpB, cpSize);
     r = e.beginRenderPass(passX2); r.setBindGroup(0, bgScene[V_MAIN]); r.setBindGroup(1, bgFx); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
     r.setPipeline(pCrystal); drawList(r, V_MAIN, lsThinX); r.setPipeline(pWater); drawList(r, V_MAIN, LS[K.WATER].all);
   }
