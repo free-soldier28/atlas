@@ -9,15 +9,16 @@ import { MPKBuilder } from './lib/pack.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
 const S = 512, CM = 100; // tileSize m, metres→cm
 
-// a small grid of buildings west of the crossroad (tile 0,0) and east of it (tile 1,0)
-const block = (x0, z0, out) => {
+// a small grid of buildings west of the crossroad (tile -1,0) and east of it (tile 0,0).
+// pts are TILE-LOCAL cm (docs/mpk-format.md): subtract the tile corner before quantizing
+const block = (x0, z0, tx, tz, out) => {
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
     const x = x0 + i * 60, z = z0 + j * 55, w = 30 + 10 * ((i + j) % 2), d = 24 + 8 * ((i * 3 + j) % 3), h = [12, 18, 9, 27, 15, 21, 30, 12, 18][(i * 3 + j) % 9];
-    out.push({ pts: [x, z, x + w, z, x + w, z + d, x, z + d].map((v) => (v - (x0 < 0 ? 0 : S)) * CM), bkind: i === 1 && j === 1 ? 2 : 1, roof: 0, h10: h * 10, base10: 0 });
+    out.push({ pts: [x, z, x + w, z, x + w, z + d, x, z + d].map((v, k) => (v - (k % 2 ? tz : tx) * S) * CM), bkind: i === 1 && j === 1 ? 2 : 1, roof: 0, h10: h * 10, base10: 0 });
   }
 };
 const west = [], east = [];
-block(-140, -70, west), block(40, -70, east); // west is in tile x=-1, east in tile x=0
+block(-140, -70, -1, 0, west), block(40, -70, 0, 0, east); // west is in tile x=-1, east in tile x=0
 
 // roads: one N-S avenue and one E-W street crossing it (the crossroad), plus a footpath.
 // pts are FLAT cm arrays: [x0, z0, x1, z1, ...] — the encoder writes them verbatim.
