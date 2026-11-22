@@ -73,7 +73,9 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   // roads and water lines: one continuous strip. Per-segment butt quads left wedge gaps at every
   // bend — the wider the road, the bigger the notch — so the strip now runs on per-vertex miter
   // pairs (adjacent segment normals averaged, length hw / cos of the half-angle, clamped at 4 hw):
-  // both segments share the joint pair, the ribbon cannot open. End vertices keep plain butt ends.
+  // both segments share the joint pair, the ribbon cannot open. Ends run half a width past their
+  // last point: separate ways meet at a node with their ends apart, and the wedges between their
+  // butt lines only close if both ribbons reach across the joint.
   // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame
   const ribbon = (mb, pts, hw, dx, dz, y = 0.06) => {
     const n = pts.length / 2; if (n < 2) return;
@@ -83,6 +85,8 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       dirX[i] = L < 1e-6 ? (i ? dirX[i - 1] : 1) : ex / L;
       dirZ[i] = L < 1e-6 ? (i ? dirZ[i - 1] : 0) : ez / L;
     }
+    const ext = hw * .5, bx = [dx + pts[0] / 100 - dirX[0] * ext, dz + pts[1] / 100 - dirZ[0] * ext],
+      ex2 = [dx + pts[pts.length - 2] / 100 + dirX[n - 2] * ext, dz + pts[pts.length - 1] / 100 + dirZ[n - 2] * ext];
     const off = new Float64Array(n * 4); // per vertex: minus-x, minus-z, plus-x, plus-z
     for (let i = 0; i < n; i++) {
       let mx, mz; // the joint's outward direction: the segment's normal at the ends, their average inside
@@ -90,10 +94,12 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       else if (i === n - 1) { mx = dirZ[i - 1]; mz = -dirX[i - 1]; }
       else { mx = dirZ[i - 1] + dirZ[i]; mz = -(dirX[i - 1] + dirX[i]); const L = hypot(mx, mz);
         if (L > 1e-9) { mx /= L; mz /= L; } else { mx = dirZ[i]; mz = -dirX[i]; } }
-      const seg = min(i, n - 2), px = dx + pts[i * 2] / 100, pz = dz + pts[i * 2 + 1] / 100;
+      const seg = min(i, n - 2);
+      const bxx = i === 0 ? bx[0] : i === n - 1 ? ex2[0] : dx + pts[i * 2] / 100;
+      const bzz = i === 0 ? bx[1] : i === n - 1 ? ex2[1] : dz + pts[i * 2 + 1] / 100;
       const ml = min(hw / max(0.3, abs(mx * dirZ[seg] - mz * dirX[seg])), 4 * hw);
-      off[i * 4] = px - mx * ml; off[i * 4 + 1] = pz - mz * ml;
-      off[i * 4 + 2] = px + mx * ml; off[i * 4 + 3] = pz + mz * ml;
+      off[i * 4] = bxx - mx * ml; off[i * 4 + 1] = bzz - mz * ml;
+      off[i * 4 + 2] = bxx + mx * ml; off[i * 4 + 3] = bzz + mz * ml;
     }
     for (let i = 0; i + 1 < n; i++)
       mb.quad(mb.v(off[i * 4], y, off[i * 4 + 1], 0, 1, 0), mb.v(off[i * 4 + 2], y, off[i * 4 + 3], 0, 1, 0),

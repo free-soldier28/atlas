@@ -289,6 +289,7 @@ for (const el of buildingsEls) {
 
 // ---------- roads (also collect drivable geometry for the graph) ----------
 const drivableWays = []; // { nodeIds, pts (local m), cls, flags, name, lanes, speed }
+const ribbonLines = []; // { pts (local m), rec } — merged into continuation chains before packing
 for (const el of roadsEls) {
   if (el.type !== 'way' || !el.tags?.highway || !el.geometry) continue;
   stats.highwayWays++;
@@ -307,10 +308,51 @@ for (const el of roadsEls) {
   const width = !isNaN(num(t.width)) ? num(t.width) : !isNaN(num(t.lanes)) ? num(t.lanes) * 3.5 + 2 : WDEF[cls];
   const speed = isNaN(num(t.maxspeed)) ? SDEF[cls] : num(t.maxspeed);
   const rec = { cls, flags: oneway === -1 ? 1 : oneway, name: t.name || undefined, lanes, w10: Math.round(width * 10) };
-  const runs = clipLine(pts); // split at the bbox+2km edge; the graph below keeps the full way
-  for (const run of runs) assign(run, 'r', rec);
-  stats.roadRecs += runs.length;
+  ribbonLines.push({ pts, rec });
+  stats.roadRecs++;
   if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed });
+}
+
+// mappers cut one road into many ways at every junction; two ways that merely continue each other
+// through a 2-way node left a wedge gap between their ribbon butt lines at every such seam. Chains
+// of same-class, same-width ways continuing at < 15° glue into one polyline (the graph below still
+// builds from the original per-way geometry, so junction nodes stay junctions)
+const COS15 = Math.cos(15 * Math.PI / 180);
+{
+  const ends = new Map(); // "x,z" (dm grid) → [{ line, atStart }]
+  const key = (x, z) => `${Math.round(x * 10)},${Math.round(z * 10)}`;
+  for (const l of ribbonLines) for (const atStart of [true, false]) {
+    const [x, z] = atStart ? [l.pts[0], l.pts[1]] : [l.pts[l.pts.length - 2], l.pts[l.pts.length - 1]];
+    const k = key(x, z);
+    if (!ends.has(k)) ends.set(k, []);
+    ends.get(k).push({ line: l, atStart });
+  }
+  const dirOf = (l, atStart) => atStart ? [l.pts[2] - l.pts[0], l.pts[3] - l.pts[1]] : [l.pts[l.pts.length - 4] - l.pts[l.pts.length - 2], l.pts[l.pts.length - 3] - l.pts[l.pts.length - 1]];
+  let merged = 0;
+  for (const l of ribbonLines) {
+    if (l.dead) continue;
+    for (let guard = 0; guard < 64; guard++) {
+      const k = key(l.pts[l.pts.length - 2], l.pts[l.pts.length - 1]);
+      const cand = (ends.get(k) || []).filter((e) => e.line !== l && !e.line.dead && e.atStart && e.line.rec.cls === l.rec.cls && e.line.rec.w10 === l.rec.w10 && e.line.rec.flags === l.rec.flags);
+      if (cand.length !== 1) break; // a junction (3+ ends) or nothing: the node stays
+      const n2 = cand[0].line;
+      if (l.pts.length / 2 + n2.pts.length / 2 > 4000) break;
+      const d1 = dirOf(l, false), d2 = dirOf(n2, true);
+      const dot = (d1[0] * d2[0] + d1[1] * d2[1]) / (Math.hypot(d1[0], d1[1]) * Math.hypot(d2[0], d2[1]) || 1);
+      if (dot < COS15) break; // a real corner: the joint keeps its miters
+      l.pts.push(...n2.pts); // same travel direction, the tails already touch: concatenate
+      n2.dead = true;
+      l.merges = (l.merges || 0) + 1 + (n2.merges || 0);
+      merged++;
+    }
+  }
+  stats.mergedRoads = merged;
+  for (const l of ribbonLines) {
+    if (l.dead) continue;
+    const runs = clipLine(l.pts); // split at the bbox+2km edge; the graph below keeps the full way
+    for (const run of runs) assign(run, 'r', l.rec);
+    stats.roadRecs += runs.length;
+  }
 }
 
 // ---------- graph ----------
@@ -454,3 +496,14 @@ for (const t of tileList) for (const r of t.b) {
   if (Math.hypot(x - cx, z - cz) < 100) castleNear++;
 }
 console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${cz.toFixed(0)}) m, ${castleNear} buildings within 100 m`);
+
+// ---------- pack QA: every shipped defect class is a gate here — a new city fails its build ----------
+console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
+{
+  const { qa } = await import('./qa.mjs');
+  const rep = await qa('packs/grodno.mpk');
+  console.log(`build: QA — ${rep.errors.length} errors, ${rep.warns.length} warns (joints ${rep.stats.roadJoints}, gaps ${rep.stats.roadJointGaps})`);
+  for (const e of rep.errors) console.log('  QA ERROR:', e.check, e.msg);
+  for (const w of rep.warns) console.log('  QA warn:', w.check, w.msg);
+  if (rep.errors.length) process.exitCode = 1;
+}
