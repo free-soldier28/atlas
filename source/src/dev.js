@@ -82,8 +82,8 @@
   // starts after 2 s of ordinary frames, like a session already running
   window.__bench = () => new Promise((res) => { finish = res; menu = false; F[FLT] = 0; flyAt(); requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); }); setTimeout(() => start(true), 2000); });
   // peak speed and turn rate of the path (limits: 80 m/s, 40 deg/s), and its lowest clearance over ground or water
-  // (bridges, buildings, trees not counted)
-  const groundY = (x, z) => { const r = hypot(x, z); if (r < 58) return 40; if (r < 70.5) return 30; if (r < 85) return 20; const zn = zoneOf(x, z); return zn === 8 ? max(terrainH(x, z), 0) : zn % 2 ? WATER : LAND; };
+  // (the pack world is flat at y 0 until terrain packs arrive)
+  const groundY = () => 0;
   window.__path = () => {
     let vm = 0, wm = 0, px = 0, py = 0, pz = 0, pa = 0, lo = 1e9, lt = 0;
     for (let i = 0; i <= 3600; i++) {
@@ -122,8 +122,8 @@
   };
   // collision tests. __surf("x,z,y;..."): floor and ceiling there (y decides on or under a bridge).
   // __ram("x,y,z,dx,dy,dz,speed,seconds;..."): push the camera at 180 steps/s; where it ends and the floor there.
-  // __hard(): the first domes, halls and villas the collision knows
-  window.__hard = () => `domes ${Array.from(HD.slice(0, 6)).map((v) => v.toFixed(1))} | halls ${Array.from(HH.slice(0, 8)).map((v) => v.toFixed(2))} | villas ${HV.length / 7}: ${Array.from(HV.slice(0, 14)).map((v) => v.toFixed(2))} | shape 0: ${Array.from(HS.slice(HV[6] * 9, HV[6] * 9 + 9)).map((v) => v.toFixed(2))}`;
+  // __hard(): the old Atlantis shape lists are gone — the pack world collides through building boxes instead
+  window.__hard = () => 'n/a (pack world: building boxes, see __surf)';
   window.__surf = (s) => s.split(';').map((p) => { const [x, z, y] = p.split(',').map(Number); surfaceAt(x, z, y === undefined ? 1e9 : y); return `floor ${COL[0].toFixed(2)}${COL[1] < 1e8 ? ' ceiling ' + COL[1].toFixed(2) : ''}${COL[2] ? ' natural' : ''}`; }).join(' | ');
   window.__ram = (s) => s.split(';').map((p) => {
     const [x, y, z, dx, dy, dz, sp, secs] = p.split(',').map(Number), l = hypot(dx, dy, dz), n = round(secs * 180), dt = 1 / 180;
@@ -132,8 +132,8 @@
     const us = (performance.now() - t0) * 1000 / n; surfaceAt(F[CX], F[CZ], F[CY]);
     return `-> ${F[CX].toFixed(1)}, ${F[CY].toFixed(2)}, ${F[CZ].toFixed(1)} · moved ${hypot(F[CX] - x, F[CZ] - z).toFixed(1)} m of ${(sp * secs * hypot(dx, dz) / l).toFixed(1)} · floor there ${COL[0].toFixed(2)} · ${us.toFixed(2)} us a step`;
   }).join('\n');
-  // land height under "x,z;x,z;..."
-  window.__ground = (s) => s.split(';').map((p) => { const [x, z] = p.split(',').map(Number); return terrainH(x, z).toFixed(1); }).join(' ');
+  // land height under "x,z;x,z;...": flat until terrain packs arrive
+  window.__ground = () => 'n/a (flat ground)';
   window.__stats = () => PASSES.map((p, i) => `${p} ${gpuMs[i].toFixed(2)}`).join('  ') + `  | total ${gpuMs[NP].toFixed(2)} ms`;
   if (AUTO) tsOn = hasTS;
   window.__ready = true;

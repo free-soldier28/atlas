@@ -1,4 +1,5 @@
-// the world: which meshes exist and where every instance stands
+// the world: which meshes exist and where every instance stands — built from the map pack (PK).
+// One merged mesh per tile per layer kind (chunked static geometry); the ground is one plane over the pack.
 const K = { SOLID: 0, LEAF: 1, CRYSTAL: 2, GLASS: 3, WATER: 4, CASCADE: 5 };
 // flags: not in the camera cascade / mirror / any shadow map / baked shadows (moving things); never culled; drawn
 // last (ground); thin crystal, drawn after the solid crystals so they show through
@@ -6,7 +7,12 @@ const NO_NEAR = 1, NO_MIRROR = 2, NO_SHADOW = 4, NO_BAKE = 8, ALWAYS = 16, DRAW_
 const Q0 = [0, 0, 0, 1];
 const rgb = (r, g, b, a = 1) => (round(clamp(a, 0, 1) * 255) << 24 | round(clamp(b, 0, 1) * 255) << 16 | round(clamp(g, 0, 1) * 255) << 8 | round(clamp(r, 0, 1) * 255)) >>> 0;
 
-function buildWorld() {
+// road class → full width in metres when the record's w10 is 0 (docs/mpk-format.md)
+const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
+// building kind → plaster tint (bkind codes are pipeline-owned; unknown ones fall back to white)
+const BTINT = [0xffffffff, rgb(.82, .78, .72), rgb(.72, .7, .66), rgb(.62, .58, .52), rgb(.7, .6, .5), rgb(.58, .6, .62)];
+
+async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const meshes = [], types = [];
   let IB = new ArrayBuffer(48 << 14), IF = new Float32Array(IB), IU = new Uint32Array(IB), nI = 0;
   // up to four LODs switched at d01, d12, d23, gone beyond dmax; thin > 0: distance where instances start thinning out
@@ -16,92 +22,129 @@ function buildWorld() {
     const o = nI++ * 12; IF[o] = x; IF[o + 1] = y; IF[o + 2] = z; IF[o + 3] = s; IF[o + 4] = q[0]; IF[o + 5] = q[1]; IF[o + 6] = q[2]; IF[o + 7] = q[3];
     IU[o + 8] = tint; IU[o + 9] = ty; IF[o + 10] = types[ty].flags & ALWAYS ? 1e6 : meshes[types[ty].lods[0]].rad * s * max(1, sy); IF[o + 11] = sy; types[ty].n++;
   };
-  // ground masks, 1 m/texel over +-1024 m. City: r paved, g planting bed, b worn path. Farmed shelf: r track, g wide-row
-  // crop, b parcel verge, a tilled field; LANDMAP there: crop colour (sqrt) and in alpha the earth between rows.
-  // CROP per parcel kind: colour, earth between rows, wide rows.
+
+  // ground masks, 1 m/texel over +-1024 m: MAP all neutral, LANDMAP flat grass. Green layers darken the grass
+  // to park green; roads store their dark asphalt (r would need > .5 for ground()'s paving — the ribbon meshes
+  // carry the look until the ground shader learns pack colours).
   const MAP = new Uint8Array(2048 * 2048 * 4), LANDMAP = new Uint8Array(2048 * 2048 * 4);
-  const CROP = [null, [0.4, 0.31, 0.12, 0.3, 0], [0.26, 0.2, 0.4, 0.85, 1], [0.1, 0.19, 0.055, 0.9, 1], null, [0.2, 0.145, 0.095, 0.5, 0], [0.085, 0.2, 0.06, 0.22, 0]];
-  const paint = (x, z, rad, ch, val, soft = 1.5) => {
-    const x0 = max(0, floor(x + 1024 - rad - soft)), x1 = min(2047, ceil(x + 1024 + rad + soft)), z0 = max(0, floor(z + 1024 - rad - soft)), z1 = min(2047, ceil(z + 1024 + rad + soft));
-    for (let j = z0; j <= z1; j++) for (let i = x0; i <= x1; i++) { const d = hypot(i + 0.5 - 1024 - x, j + 0.5 - 1024 - z), k = clamp((rad + soft - d) / soft, 0, 1), o = (j * 2048 + i) * 4 + ch; MAP[o] = MAP[o] + (val - MAP[o]) * k; }
-  };
-  for (let j = 0; j < 2048; j++) for (let i = 0; i < 2048; i++) {
-    const x = i + 0.5 - 1024, z = j + 0.5 - 1024, r = hypot(x, z), o = (j * 2048 + i) * 4;
-    if (r < 420) { const zn = zoneOf(x, z), lat = spokeLat(x, z); MAP[o] = zn === 2 || lat < 8.5 ? 255 : 0; }
-    else {
-      LANDMAP[o] = 140; LANDMAP[o + 1] = 162; LANDMAP[o + 2] = 115; // grass, for a crop's edge to blend into
-      // no fields at the canal, coast, river or under the woods
-      const t = atan2(z, x), zone = r < 1250 ? sstep(20, 50, r - RB.out(t)) * sstep(25, 60, coastT(t) - r) * sstep(RIV_SHELF + 2, RIV_SHELF + 10, riverDist(x, z)) * (1 - sstep(0.57, 0.62, woodAt(x, z))) : 0;
-      if (zone > 0) {
-        const pa = parcelAt(x, z), use = parcelUse(pa.b, pa.s), C = CROP[use.kind], tone = 0.8 + 0.4 * use.id;
-        if (use.farm) MAP[o + 2] = 255 * zone * (1 - sstep(1, 3.2, pa.edge));
-        if (C) { MAP[o + 3] = 255 * zone * sstep(1.4, 3.4, pa.edge); MAP[o + 1] = 255 * C[4]; for (let k = 0; k < 3; k++) LANDMAP[o + k] = 255 * sqrt(min(1, C[k] * tone)); LANDMAP[o + 3] = 255 * C[3]; }
-      }
+  for (let j = 0; j < 2048; j++) for (let i = 0; i < 2048; i++) { const o = (j * 2048 + i) * 4; LANDMAP[o] = 140; LANDMAP[o + 1] = 162; LANDMAP[o + 2] = 115; LANDMAP[o + 3] = 255; }
+  // one ribbon rectangle of a road into MAP: dark asphalt (40, 40, 45)
+  const paintSeg = (x0, z0, x1, z1, hw) => {
+    const ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez); if (L < 1e-6) return;
+    const ux = ex / L, uz = ez / L, nx = uz, nz = -ux;
+    const i0 = max(0, floor(min(x0, x1) - hw) + 1024), i1 = min(2047, ceil(max(x0, x1) + hw) + 1024);
+    const j0 = max(0, floor(min(z0, z1) - hw) + 1024), j1 = min(2047, ceil(max(z0, z1) + hw) + 1024);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const px = i + 0.5 - 1024 - x0, pz = j + 0.5 - 1024 - z0, s = px * ux + pz * uz;
+      if (s < -0.5 || s > L + 0.5 || abs(px * nx + pz * nz) > hw) continue;
+      const o = (j * 2048 + i) * 4; MAP[o] = 40; MAP[o + 1] = 40; MAP[o + 2] = 45;
     }
-  }
-
-  // ground, podium, terrain
-  put(type([meshCityGround()], K.SOLID, 1e9, 1e9, 1e9, 0, DRAW_LAST), 0, 0, 0);
-  put(type([meshPodium()], K.SOLID), 0, 0, 0);
-  const tStair = type([meshPodiumStair(0), meshPodiumStair(1)], K.SOLID, 125, 1e9, 1e9);
-  for (const a of SPOKES) put(tStair, STAIR_C[0] * cos(a), STAIR_C[1], STAIR_C[0] * sin(a), 1, qYaw(-a));
-  const land = meshTerrain();
-  // Medium/Low: three LODs per chunk, distances in LODK units. LOD distance is measured from the sphere's edge less half
-  // its radius, so chunks count as twice their size: the one under the camera must be finest (collision follows it).
-  for (const ch of land.chunks) { put(type(ch.lods, K.SOLID, QL(1e9, 650, 500), QL(1e9, 1950, 1500), 1e9, 0, NO_NEAR | DRAW_LAST), ch.c[0], ch.c[1], ch.c[2]); if (LV) IF[(nI - 1) * 12 + 10] *= 2; }
-
-  // bridges and their balustrades
-  const tPost = type([meshBalPost(0), meshBalPost(1)], K.SOLID, 130, 1e9, 700), tPanel = type([meshBalPanel(0), meshBalPanel(1)], K.CRYSTAL, 130, 1e9, 420, 0, NO_NEAR | THIN);
-  // balustrade from a to b, posts at both ends
-  const balRun = (a, b) => {
-    const L = hypot(b[0] - a[0], b[2] - a[2]), n = max(1, round(L / BAL)), k = L / n / BAL, q = qYaw(-atan2(b[2] - a[2], b[0] - a[0]));
-    for (let i = 0; i < n; i++) { const t = i / n, x = mix(a[0], b[0], t), y = mix(a[1], b[1], t), z = mix(a[2], b[2], t); put(tPost, x, y, z, k, q, 0xffffffff, 1 / k); put(tPanel, x, y, z, k, q, 0xffffffff, 1 / k); }
   };
-  const balArc = (r, y, a0, a1) => { const n = max(1, round(abs(a1 - a0) * r / BAL)); for (let i = 0; i < n; i++) { const t0 = mix(a0, a1, i / n), t1 = mix(a0, a1, (i + 1) / n); balRun([r * cos(t0), y, r * sin(t0)], [r * cos(t1), y, r * sin(t1)]); } };
-  const brm = new MB(1 << 15);
-  for (let k = 0; k < 6; k++) {
-    const t = SPOKES[k], c = cos(t), s = sin(t);
-    const span = (r0, r1, ya, yb, hump, arches, floor) => {
-      const b = bridge(brm, r0 * c, r0 * s, r1 * c, r1 * s, SPOKE_W, ya, yb, hump, arches, floor), S = max(2, round(b.L / 7.8));
-      for (const sd of [-1, 1]) for (let i = 0; i < S; i++) {
-        const u0 = b.L * i / S, u1 = b.L * (i + 1) / S, v = sd * (SPOKE_W - 0.19), P = (u) => [r0 * c + b.ux * u + b.vx * v, b.top(u) + 0.34, r0 * s + b.uz * u + b.vz * v];
-        balRun(P(u0), P(u1));
+  // a green polygon into LANDMAP: park green, per-pixel point-in-polygon (parks are small; 1 m/texel is fine)
+  const paintPoly = (pts) => {
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (let k = 0; k < pts.length; k += 2) { x0 = min(x0, pts[k]); x1 = max(x1, pts[k]); z0 = min(z0, pts[k + 1]); z1 = max(z1, pts[k + 1]); }
+    const n = pts.length / 2;
+    for (let j = max(0, floor(z0) + 1024), j1 = min(2047, ceil(z1) + 1024); j <= j1; j++) for (let i = max(0, floor(x0) + 1024), i1 = min(2047, ceil(x1) + 1024); i <= i1; i++) {
+      const px = i + 0.5 - 1024, pz = j + 0.5 - 1024; let inside = false;
+      for (let k = 0, m = n - 1; k < n; m = k++) {
+        const xi = pts[k * 2], zi = pts[k * 2 + 1], xm = pts[m * 2], zm = pts[m * 2 + 1];
+        if ((zi > pz) !== (zm > pz) && px < (xm - xi) * (pz - zi) / (zm - zi) + xi) inside = !inside;
       }
-    };
-    // decks 1 cm above the quays' copings, against z-fighting
-    span(RB.moat(t) + 0.4, STAIR.r0, 10.31, STAIR.y0, 0.5, 3, FLOOR_Y.moat);
-    span(RB.civ(t) - 0.4, RB.mid(t) + 0.4, 10.31, 10.31, 1.15, 3, FLOOR_Y.mid);
-    span(RB.chi(t) - 0.4, RB.cho(t) + 0.4, 10.31, 10.31, k ? 0.5 : 1.0, k ? 1 : 3, FLOOR_Y.ch);
-    span(RB.gar(t) - 0.4, RB.out(t) + 0.4, 10.31, 10.31, 1.15, 3, FLOOR_Y.out);
+      if (inside) { const o = (j * 2048 + i) * 4; LANDMAP[o] = 60; LANDMAP[o + 1] = 120; LANDMAP[o + 2] = 60; }
+    }
+  };
+
+  // pack bounds in metres: the tiles' corner span (+200 m margin for the ground plane)
+  const S = PK.h.tileSize || 512;
+  let tx0 = 1e9, tx1 = -1e9, tz0 = 1e9, tz1 = -1e9;
+  for (const t of PK.h.tiles) { tx0 = min(tx0, t[0]); tx1 = max(tx1, t[0]); tz0 = min(tz0, t[1]); tz1 = max(tz1, t[1]); }
+  const gx0 = tx0 * S - 200, gx1 = (tx1 + 1) * S + 200, gz0 = tz0 * S - 200, gz1 = (tz1 + 1) * S + 200;
+
+  // ground: one flat plane (the pack frame is flat until terrain packs arrive), drawn last
+  {
+    const mb = new MB(16); mb.mat = M.GROUND;
+    mb.v(gx0, 0, gz0, 0, 1, 0); mb.v(gx1, 0, gz0, 0, 1, 0); mb.v(gx1, 0, gz1, 0, 1, 0); mb.v(gx0, 0, gz1, 0, 1, 0);
+    mb.tri(0, 2, 1); mb.tri(0, 3, 2);
+    put(type([mb.build()], K.SOLID, 1e9, 1e9, 1e9, 0, NO_NEAR | DRAW_LAST), 0, 0, 0);
   }
-  put(type([brm.build()], K.SOLID), 0, 0, 0);
-  // podium balustrades: plaza edge and the two ledges, between the stairways
-  for (let k = 0; k < 6; k++) for (const [R, y] of [[57.2, 40.46], [69.3, 30.46], [83.8, 20.46]]) { const c = asin((STAIR.hw + 1) / R); balArc(R, y, SPOKES[k] + c, SPOKES[k] + PI / 3 - c); }
 
-  // crystal, lotus, pylons, towers
-  const tCrystal = type([meshCrystal([[8.5, 0], [7.25, 84], [3.5, 95.5], [0, 101]])], K.CRYSTAL);
-  put(tCrystal, 0, 44.4, 0);
-  const tPetal = type([meshPetal()], K.CRYSTAL, 1e9, 1e9, 1e9, 0, THIN), tRim = type([meshPetalRim()], K.SOLID);
-  for (let i = 0; i < 16; i++) {
-    const inner = i % 2 === 0, a = i / 16 * TAU + 0.11, tilt = (inner ? 25 : 47) * DEG, len = inner ? 33 : 28, br = inner ? 10.4 : 13.2;
-    const y = [sin(tilt) * cos(a), cos(tilt), sin(tilt) * sin(a)], x = [-sin(a), 0, cos(a)], z = vcross(x, y), q = qBasis(x, y, z);
-    put(tPetal, br * cos(a), 44.5, br * sin(a), len, q); put(tRim, br * cos(a), 44.5, br * sin(a), len, q);
+  const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top]
+  // a building prism: walls (a quad per edge, outward normals; MB.build rewinds to match) and a roof fan.
+  // The fan needs convex footprints — sample packs are; a later agent replaces it with ear clipping.
+  // TODO earclip
+  const prism = (mb, X, Z, n, base, top) => {
+    let A = 0; for (let i = 0; i < n; i++) { const j = (i + 1) % n; A += X[i] * Z[j] - X[j] * Z[i]; }
+    const s = A > 0 ? 1 : -1; // outward wall normal is (dz, -dx) when the shoelace sum is positive
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, ex = X[j] - X[i], ez = Z[j] - Z[i], L = hypot(ex, ez); if (L < 1e-6) continue;
+      const nx = ez * s / L, nz = -ex * s / L;
+      mb.quad(mb.v(X[i], base, Z[i], nx, 0, nz), mb.v(X[j], base, Z[j], nx, 0, nz), mb.v(X[j], top, Z[j], nx, 0, nz), mb.v(X[i], top, Z[i], nx, 0, nz));
+    }
+    const i0 = mb.v(X[0], top, Z[0], 0, 1, 0);
+    for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(X[i], top, Z[i], 0, 1, 0), mb.v(X[i + 1], top, Z[i + 1], 0, 1, 0));
+  };
+  // roads: a ribbon of per-segment quads, no miter joints (gaps at corners are fine at night scale)
+  const ribbon = (mb, pts, hw) => {
+    for (let i = 0; i + 3 < pts.length; i += 2) {
+      const x0 = pts[i], z0 = pts[i + 1], x1 = pts[i + 2], z1 = pts[i + 3], ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez);
+      if (L < 1e-6) continue;
+      const nx = ez / L * hw, nz = -ex / L * hw;
+      mb.quad(mb.v(x0 - nx, 0.06, z0 - nz, 0, 1, 0), mb.v(x0 + nx, 0.06, z0 + nz, 0, 1, 0), mb.v(x1 + nx, 0.06, z1 + nz, 0, 1, 0), mb.v(x1 - nx, 0.06, z1 - nz, 0, 1, 0));
+    }
+  };
+  // a flat polygon fan at height y (convex or star-shaped around vertex 0 — enough for pack areas)
+  const fan = (mb, pts, y, up) => {
+    const n = pts.length / 2, i0 = mb.v(pts[0], y, pts[1], 0, up, 0);
+    for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(pts[i * 2], y, pts[i * 2 + 1], 0, up, 0), mb.v(pts[i * 2 + 2], y, pts[i * 2 + 3], 0, up, 0));
+  };
+
+  // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming)
+  for (let i = 0; i < PK.h.tiles.length; i++) {
+    const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S;
+    const mB = new MB(1 << 16), mR = new MB(1 << 15), mW = new MB(1 << 12), mG = new MB(1 << 12);
+    let nB = 0, nR = 0, nW = 0, nG = 0;
+    for (const L of lods) {
+      if (L.kind === 1) {
+        mB.mat = M.PLASTER;
+        for (const r of L.recs) {
+          const n = r.pts.length / 2, X = new Float64Array(n), Z = new Float64Array(n);
+          let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+          for (let k = 0; k < n; k++) { X[k] = ox + r.pts[k * 2] / 100; Z[k] = oz + r.pts[k * 2 + 1] / 100; x0 = min(x0, X[k]); x1 = max(x1, X[k]); z0 = min(z0, Z[k]); z1 = max(z1, Z[k]); }
+          const base = r.base10 / 10, top = base + r.h10 / 10;
+          if (top - base < 0.1 || x1 - x0 < 0.1 || z1 - z0 < 0.1) continue; // degenerate slivers
+          prism(mB, X, Z, n, base, top);
+          bboxes.push(x0, z0, x1, z1, top); nB++;
+        }
+      } else if (L.kind === 2) {
+        mR.mat = M.PAVE;
+        for (const r of L.recs) {
+          const hw = (r.w10 || (CLSW[r.cls] || 8) * 10) / 20;
+          ribbon(mR, r.pts, hw);
+          for (let k = 0; k + 3 < r.pts.length; k += 2) paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
+          nR++;
+        }
+      } else if (L.kind === 3) {
+        mW.mat = 0; mW.ea = 0; // fsWater's inland-water look (river, lake, canal, pond); the mesh is just positions
+        for (const r of L.recs) { const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = (k & 1 ? oz : ox) + r.pts[k] / 100; fan(mW, pts, WATER, 1); nW++; }
+      } else if (L.kind === 4) {
+        mG.mat = M.GROUND; // ground() ignores tint; the polys sit on the shader's lawn, LANDMAP carries the park green
+        for (const r of L.recs) {
+          const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = (k & 1 ? oz : ox) + r.pts[k] / 100;
+          fan(mG, pts, 0.03, 1); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
+        }
+      } // kind 5 (terrain patches) and unknown kinds: skipped until terrain packs arrive
+    }
+    // only register meshes that got geometry (degenerate records — e.g. a pack's zeroed road pts — make none)
+    if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
+    if (nR && mR.ni) put(type([mR.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
+    if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), 0, 0, 0);
+    if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
   }
-  const tPylon = type([meshCrystal([[0.25, 0], [1.2, 2.4], [1.32, 7], [0.95, 10.4], [0, 12.6]], true)], K.CRYSTAL), tPyBase = type([meshPylonBase()], K.SOLID);
-  for (let i = 0; i < 12; i++) { const a = (i + 0.5) / 12 * TAU, x = 50.4 * cos(a), z = 50.4 * sin(a); put(tPyBase, x, 40, z, 1, qYaw(-a)); put(tPylon, x, 41.7, z, 1, qYaw(-a)); }
-  const tw = [72, 80, 88].map((h) => { TOWER.h = h; return [type([meshCrystal([[TOWER.r0, 0], [TOWER.r1, h - TOWER.tip], [TOWER.r1 * 0.78, h - TOWER.tip * 0.72], [0, h]])], K.CRYSTAL), type([meshTowerTrim()], K.SOLID)]; });
-  for (let k = 0; k < 6; k++) { const a = TOWERS[k], v = tw[[72, 80, 88].indexOf(TOWER_HS[k])], x = TOWER_R * cos(a), z = TOWER_R * sin(a); put(v[0], x, 12.6, z, 1, qYaw(k * 0.4)); put(v[1], x, 0, z, 1, qYaw(k * 1.3)); }
 
-  // water
-  const wm = new MB(1 << 14);
-  waterRing(wm, RB.civ, RB.mid, WATER, 0); waterRing(wm, RB.chi, RB.cho, WATER, 0); waterRing(wm, RB.gar, RB.out, WATER, 0);
-  waterRing(wm, 85, RB.moat, WATER, 1); waterRing(wm, POOL[0], POOL[1], 39.95, 1, 96); waterRing(wm, 58, 60.4, 29.9, 1, 192); waterRing(wm, 70.5, 72.9, 19.9, 1, 192);
-  waterRing(wm, 15.5, 20.1, 42.0, 1, 64); waterRing(wm, 57, 57.8, 39.84, 1, 192); waterRing(wm, 69.5, 70.3, 29.84, 1, 192); waterRing(wm, 84, 84.8, 19.84, 1, 192);
-  put(type([wm.build()], K.WATER), 0, 0, 0);
-  put(type([meshSea()], K.WATER), 0, 0, 0);
-  put(type([meshCascades()], K.CASCADE), 0, 0, 0);
+  // routing graph, decoded once here (GPS walks it later); absent in country packs
+  PK.graph = await mpkGraph(PK);
 
-  const hard = { domes: [], halls: [], villas: [], shapes: [] };
-  populate({ type, put, paint, MAP, balRun, gH: land.heightAt, hard });
-  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: land.drawnAt, hard };
+  const hard = { domes: [], halls: [], villas: [], shapes: [] }; // Atlantis shapes are gone; boxes rule now
+  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes };
 }

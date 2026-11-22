@@ -45,7 +45,7 @@
   ev.forEach((e, i) => { ES[i] = e[0]; EV[i] = e[1]; EF[i] = 440 * 2 ** ((e[2] - 69) / 12); EL[i] = e[3]; EA[i] = e[4]; });
 
   let ctx = null, out, osc, amp, vib, timer = 0, off = 0, t0 = 0, n = 0, i = 0, muted = false;
-  try { muted = localStorage.atlantisMute === '1'; } catch {}
+  try { muted = localStorage.atlasMute === '1'; } catch {}
 
   // one note: pitch set while the voice is silent (every envelope ends at zero before the next note starts), then
   // straight-line envelopes inside the note's own span, so no two notes' automation interleave and nothing clicks
@@ -123,7 +123,7 @@
     GESTURES.forEach((g) => addEventListener(g, gesture, true));
     addEventListener('keydown', (e) => {
       if (e.code !== 'KeyM' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      muted = !muted; try { localStorage.atlantisMute = muted ? '1' : ''; } catch {}
+      muted = !muted; try { localStorage.atlasMute = muted ? '1' : ''; } catch {}
       if (ctx) apply();
     }, true);
     document.addEventListener('visibilitychange', () => { if (ctx) apply(); });

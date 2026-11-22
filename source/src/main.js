@@ -9,12 +9,12 @@ const hasTS = adapter.features.has('timestamp-query');
 const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query', 'indirect-first-instance'] : ['indirect-first-instance'] });
 window.__info = `${adapter.info.vendor} · ${adapter.info.architecture} · ${adapter.info.description}${adapter.info.isFallbackAdapter ? ' · FALLBACK (software)' : ''} · ${LVN[LV]}`;
 device.addEventListener('uncapturederror', (e) => console.error('GPU: ' + e.error.message.slice(0, 900)));
-// device lost (out of memory, driver reset): restart a level lower; on Low, say so. atlantisLost tells the next load
+// device lost (out of memory, driver reset): restart a level lower; on Low, say so. atlasLost tells the next load
 // why it may get no adapter (cleared once a load survives)
 device.lost.then((l) => {
   if (l.reason === 'destroyed') return; // the page is closing
-  console.error(`device lost while "${$('s').textContent}": ${l.message}`); keep('atlantisLost', 1);
-  if (LV < 2 && !AUTO && !QP.has('lv')) { keep('atlantis', LV + 1); location.reload(); }
+  console.error(`device lost while "${$('s').textContent}": ${l.message}`); keep('atlasLost', 1);
+  if (LV < 2 && !AUTO && !QP.has('lv')) { keep('atlas', LV + 1); location.reload(); }
   dead = true; body.className = 'l e'; $('s').textContent = 'The graphics device was lost. Reload the page to try again, or restart the browser if that fails.';
 });
 const ctx = canvas.getContext('webgpu'), FMT = navigator.gpu.getPreferredCanvasFormat();
@@ -144,10 +144,14 @@ const cubeView = (t, o = {}) => t.createView({ dimension: 'cube', ...o });
 
 // the world: meshes, instances, levels of detail
 await say('Raising the city…', 0.2);
-keep('atlantisLoad', 1);
-addEventListener('pagehide', () => keep('atlantisLoad', ''));
-const Wd = buildWorld();
-landY = Wd.ground; setHard(Wd.hard); // collision ground: the terrain as this level draws it near the camera; and the buildings
+keep('atlasLoad', 1);
+addEventListener('pagehide', () => keep('atlasLoad', ''));
+await say('Loading map pack…', 0.18);
+await loadPack();
+if (PK.h.poses) POSES = PK.h.poses; // viewpoints for keys 1-6 come from the pack when it has them
+if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through replaces the default lap
+const Wd = await buildWorld(PK);
+landY = Wd.ground; setHard(Wd.hard); setBoxes(Wd.bboxes); // collision ground, old shape lists (empty), building boxes
 await say('Planting gardens…', 0.7);
 let nV = 0, nIx = 0;
 for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; m.ni = m.ib.length; nV += m.nv; nIx += m.ni; }
@@ -382,8 +386,8 @@ function aim() {
   F[CX] = P6[0]; F[CY] = P6[1]; F[CZ] = P6[2]; F[YAW] = atan2(dx, -dz); F[PIT] = atan2(dy, sqrt(dx * dx + dz * dz));
 }
 const lookAt = (x, y, z, tx, ty, tz) => { P6[0] = x; P6[1] = y; P6[2] = z; P6[3] = tx; P6[4] = ty; P6[5] = tz; aim(); F[RESET] = 1; };
-// Catmull-Rom over position + look-at at F[SPL]
-const FLYN = FLY.length / 6, FLYT = 60;
+// Catmull-Rom over position + look-at at F[SPL]; the pack's fly runs 2.5 s per point (docs/mpk-format.md)
+const FLYN = FLY.length / 6, FLYT = PK.h.fly ? (PK.h.fly.length / 6 - 1) * 2.5 : 60;
 function flyRaw() {
   const s = F[SPL]; let i = floor(s) | 0; if (i > FLYN - 2) i = FLYN - 2;
   const u = s - i, i0 = (i > 0 ? i - 1 : 0) * 6, i1 = i * 6, i2 = (i + 1) * 6, i3 = (i + 2 < FLYN ? i + 2 : FLYN - 1) * 6;
@@ -533,7 +537,7 @@ function tune() {
   pix = to < top ? to : 1e9; // no limit at full resolution, so a larger window is followed
   dynOn = hasTS && (to < top || a > 17.6);
   dynN = dynT = dynMax = dynG = dynGN = 0;
-  if (to !== was) { keep('atlantis', [LV, to < top ? to | 0 : '']); resize(); }
+  if (to !== was) { keep('atlas', [LV, to < top ? to | 0 : '']); resize(); }
 }
 function frame(now) {
   requestAnimationFrame(frame);
@@ -581,7 +585,7 @@ const key = (e, v) => {
     default: if (v && !e.repeat) {
       if (e.code === 'KeyH') { hud = !hud; tsOn = hud && hasTS; info.textContent = ''; }
       else if (e.code === 'KeyC') solid = !solid;
-      else if (e.code >= 'Digit1' && e.code <= 'Digit6') { lookAt(...POSES[e.code.charCodeAt(5) - 49]); F[VX] = F[VY] = F[VZ] = 0; }
+      else if (e.code >= 'Digit1' && e.code <= 'Digit6') { const p = POSES[e.code.charCodeAt(5) - 49]; if (p) { lookAt(...p); F[VX] = F[VY] = F[VZ] = 0; } }
     }
   }
 };
@@ -617,11 +621,11 @@ $('o').onclick = () => ui(true);
 canvas.addEventListener('click', capture);
 document.addEventListener('pointerlockchange', () => { if (!mob) ui(!document.pointerLockElement); });
 // detail buttons: the current level is lit, the others reload with theirs
-$('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { try { localStorage.atlantis = 2 - i; } catch {} location.href = location.href.replace(/[?&]lv=\d/, ''); }; });
+$('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { try { localStorage.atlas = 2 - i; } catch {} location.href = location.href.replace(/[?&]lv=\d/, ''); }; });
 
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing
-lookAt(...POSES[4]); // the scene opens on viewpoint 5: the inner island, domes and crystal against the sun
+lookAt(...POSES[min(4, POSES.length - 1)]); // the scene opens on the last viewpoint the pack offers (5th by default)
 await say('Letting the light in…', 1);
 render(); await Q.onSubmittedWorkDone();
-setTimeout(() => { keep('atlantisLoad', ''); keep('atlantisLost', ''); }, 15e3); // the load counts as survived after 15 s
+setTimeout(() => { keep('atlasLoad', ''); keep('atlasLost', ''); }, 15e3); // the load counts as survived after 15 s
 if (!AUTO) { ui(true); requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); }); } else { body.className = 'g'; window.__ready = true; }

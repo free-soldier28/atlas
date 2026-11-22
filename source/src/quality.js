@@ -1,12 +1,12 @@
 // detail level, chosen before anything is built
 // LV: 0 High, 1 Medium, 2 Low: the same world, built and drawn with less detail (see README.md). QL(high, medium, low).
-// localStorage.atlantis = "level,pixels" (pixels: the resolution frame() settled on). atlantisLoad still set on the next
+// localStorage.atlas = "level,pixels" (pixels: the resolution frame() settled on). atlasLoad still set on the next
 // visit means that load crashed the tab or driver, so start a level lower. ?lv=0..2 picks a level without storing it.
 const QP = new URLSearchParams(location.search), AUTO = QP.has('auto');
 const mob = matchMedia('(pointer:coarse)').matches, mem = navigator.deviceMemory;
 const keep = (k, v) => { if (!AUTO && !QP.has('lv')) try { localStorage[k] = v; } catch {} };
 const fail = (m) => { throw new Error(m, { cause: 1 }); };
-let lost; try { lost = localStorage.atlantisLost; } catch {}
+let lost; try { lost = localStorage.atlasLost; } catch {}
 
 // the graphics adapter comes first, because it decides the level of a first visit. The dedicated card first; when the
 // browser gives none for that, ask without a preference, then for the integrated one. ?gpu=low: the integrated adapter
@@ -24,10 +24,10 @@ const IGPU = adapter.info.vendor === 'intel' && !/hp/.test(adapter.info.architec
 let SV = [], LV = 0;
 if (QP.has('lv')) LV = clamp(+QP.get('lv') | 0, 0, 2);
 else if (!AUTO) {
-  let bad; try { SV = (localStorage.atlantis || '').split(','); bad = localStorage.atlantisLoad; } catch {}
+  let bad; try { SV = (localStorage.atlas || '').split(','); bad = localStorage.atlasLoad; } catch {}
   // first visit: phones Low (Medium with 8 GB), computers High (Low with <= 4 GB or Intel integrated graphics)
   LV = SV[0] ? clamp(+SV[0] | 0, 0, 2) : mob ? (mem > 7 ? 1 : 2) : mem <= 4 || IGPU ? 2 : 0;
-  if (bad && LV < 2) { SV = [++LV]; keep('atlantis', LV); }
+  if (bad && LV < 2) { SV = [++LV]; keep('atlas', LV); }
 }
 const QL = (h, m, l) => (LV > 1 ? l : LV ? m : h), LVN = ['High', 'Medium', 'Low'];
 // sun shadow map sizes: the camera cascade (0: none), then the baked city, shelf and mountain maps. 32-bit depth
