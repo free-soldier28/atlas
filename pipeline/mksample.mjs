@@ -19,14 +19,15 @@ const block = (x0, z0, out) => {
 const west = [], east = [];
 block(-140, -70, west), block(40, -70, east); // west is in tile x=-1, east in tile x=0
 
-// roads: one N-S avenue and one E-W street crossing it (the crossroad), plus a footpath
-const avenue = [[0, -220], [0, 220]].map(([x, z]) => [x * CM, z * CM]);
-const street = [[-220, 30], [220, 30]].map(([x, z]) => [x * CM, z * CM]);
-const footpath = [[-160, -180], [-60, -120], [-60, -20], [40, 40]].map(([x, z]) => [x * CM, z * CM]);
+// roads: one N-S avenue and one E-W street crossing it (the crossroad), plus a footpath.
+// pts are FLAT cm arrays: [x0, z0, x1, z1, ...] — the encoder writes them verbatim.
+const avenue = [0, -220, 0, 220].map((v) => v * CM);
+const street = [-220, 30, 220, 30].map((v) => v * CM);
+const footpath = [-160, -180, -60, -120, -60, -20, 40, 40].map((v) => v * CM);
 const roadRec = (pts, cls, name, w10) => ({ cls, flags: 0, name, lanes: cls < 4 ? 2 : 1, w10, pts });
 
 // park southeast of the crossroad (tile 0,0)
-const park = { kind: 0, pts: [[40, 80], [180, 80], [180, 200], [40, 200]].map(([x, z]) => [x * CM, z * CM]) };
+const park = { kind: 0, pts: [40, 80, 180, 80, 180, 200, 40, 200].map((v) => v * CM) };
 
 // routing graph: the crossroad's four legs meet at two junctions
 const nodes = [[0, -12000], [0, 12000], [-12000, 3000], [12000, 3000]]; // cm

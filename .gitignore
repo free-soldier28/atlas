@@ -2,3 +2,5 @@ node_modules/
 pipeline/cache/
 packs/embed.mpk
 *.log
+index.html
+dev.html
