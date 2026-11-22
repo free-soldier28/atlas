@@ -1,16 +1,14 @@
 // the world: which meshes exist and where every instance stands — built from the map pack (PK).
-// One merged mesh per tile per layer kind (chunked static geometry); the ground is one plane over the pack.
+// One merged mesh per tile per layer kind (chunked static geometry); buildings go through citygen's
+// tint buckets and LODs; the ground is one plane over the pack.
 const K = { SOLID: 0, LEAF: 1, CRYSTAL: 2, GLASS: 3, WATER: 4, CASCADE: 5 };
 // flags: not in the camera cascade / mirror / any shadow map / baked shadows (moving things); never culled; drawn
 // last (ground); thin crystal, drawn after the solid crystals so they show through
 const NO_NEAR = 1, NO_MIRROR = 2, NO_SHADOW = 4, NO_BAKE = 8, ALWAYS = 16, DRAW_LAST = 32, THIN = 64;
 const Q0 = [0, 0, 0, 1];
-const rgb = (r, g, b, a = 1) => (round(clamp(a, 0, 1) * 255) << 24 | round(clamp(b, 0, 1) * 255) << 16 | round(clamp(g, 0, 1) * 255) << 8 | round(clamp(r, 0, 1) * 255)) >>> 0;
 
 // road class → full width in metres when the record's w10 is 0 (docs/mpk-format.md)
 const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
-// building kind → plaster tint (bkind codes are pipeline-owned; unknown ones fall back to white)
-const BTINT = [0xffffffff, rgb(.82, .78, .72), rgb(.72, .7, .66), rgb(.62, .58, .52), rgb(.7, .6, .5), rgb(.58, .6, .62)];
 
 async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const meshes = [], types = [];
@@ -69,25 +67,12 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     put(type([mb.build()], K.SOLID, 1e9, 1e9, 1e9, 0, NO_NEAR | DRAW_LAST), 0, 0, 0);
   }
 
-  const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top]
-  // a building prism: walls (a quad per edge, outward normals; MB.build rewinds to match) and a roof fan.
-  // The fan needs convex footprints — sample packs are; a later agent replaces it with ear clipping.
-  // TODO earclip
-  const prism = (mb, X, Z, n, base, top) => {
-    let A = 0; for (let i = 0; i < n; i++) { const j = (i + 1) % n; A += X[i] * Z[j] - X[j] * Z[i]; }
-    const s = A > 0 ? 1 : -1; // outward wall normal is (dz, -dx) when the shoelace sum is positive
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n, ex = X[j] - X[i], ez = Z[j] - Z[i], L = hypot(ex, ez); if (L < 1e-6) continue;
-      const nx = ez * s / L, nz = -ex * s / L;
-      mb.quad(mb.v(X[i], base, Z[i], nx, 0, nz), mb.v(X[j], base, Z[j], nx, 0, nz), mb.v(X[j], top, Z[j], nx, 0, nz), mb.v(X[i], top, Z[i], nx, 0, nz));
-    }
-    const i0 = mb.v(X[0], top, Z[0], 0, 1, 0);
-    for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(X[i], top, Z[i], 0, 1, 0), mb.v(X[i + 1], top, Z[i + 1], 0, 1, 0));
-  };
-  // roads: a ribbon of per-segment quads, no miter joints (gaps at corners are fine at night scale)
-  const ribbon = (mb, pts, hw) => {
+  const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top] (outer box at full height)
+  // roads: a ribbon of per-segment quads, no miter joints (gaps at corners are fine at night scale).
+  // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame
+  const ribbon = (mb, pts, hw, dx, dz) => {
     for (let i = 0; i + 3 < pts.length; i += 2) {
-      const x0 = pts[i], z0 = pts[i + 1], x1 = pts[i + 2], z1 = pts[i + 3], ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez);
+      const x0 = dx + pts[i] / 100, z0 = dz + pts[i + 1] / 100, x1 = dx + pts[i + 2] / 100, z1 = dz + pts[i + 3] / 100, ex = x1 - x0, ez = z1 - z0, L = hypot(ex, ez);
       if (L < 1e-6) continue;
       const nx = ez / L * hw, nz = -ex / L * hw;
       mb.quad(mb.v(x0 - nx, 0.06, z0 - nz, 0, 1, 0), mb.v(x0 + nx, 0.06, z0 + nz, 0, 1, 0), mb.v(x1 + nx, 0.06, z1 + nz, 0, 1, 0), mb.v(x1 - nx, 0.06, z1 - nz, 0, 1, 0));
@@ -99,47 +84,50 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     for (let i = 1; i < n - 1; i++) mb.tri(i0, mb.v(pts[i * 2], y, pts[i * 2 + 1], 0, up, 0), mb.v(pts[i * 2 + 2], y, pts[i * 2 + 3], 0, up, 0));
   };
 
-  // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming)
+  // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming).
+  // Every tile mesh is centre-local and its instance sits at the tile centre, so the cull pass gets a
+  // ~360 m bounding radius per tile — the LOD switches and the frustum test both work per tile.
   for (let i = 0; i < PK.h.tiles.length; i++) {
-    const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S;
-    const mB = new MB(1 << 16), mR = new MB(1 << 15), mW = new MB(1 << 12), mG = new MB(1 << 12);
-    let nB = 0, nR = 0, nW = 0, nG = 0;
+    const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S, th = S / 2, tcx = ox + th, tcz = oz + th;
+    const city = cityTile(i, lods, ox, oz, S, bboxes); // buildings into tint buckets + road centre lines
+    const mR = new MB(1 << 15), mW = new MB(1 << 12), mG = new MB(1 << 12);
+    let nR = 0, nW = 0, nG = 0;
     for (const L of lods) {
-      if (L.kind === 1) {
-        mB.mat = M.PLASTER;
-        for (const r of L.recs) {
-          const n = r.pts.length / 2, X = new Float64Array(n), Z = new Float64Array(n);
-          let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
-          for (let k = 0; k < n; k++) { X[k] = ox + r.pts[k * 2] / 100; Z[k] = oz + r.pts[k * 2 + 1] / 100; x0 = min(x0, X[k]); x1 = max(x1, X[k]); z0 = min(z0, Z[k]); z1 = max(z1, Z[k]); }
-          const base = r.base10 / 10, top = base + r.h10 / 10;
-          if (top - base < 0.1 || x1 - x0 < 0.1 || z1 - z0 < 0.1) continue; // degenerate slivers
-          prism(mB, X, Z, n, base, top);
-          bboxes.push(x0, z0, x1, z1, top); nB++;
-        }
-      } else if (L.kind === 2) {
+      if (L.kind === 2) {
         mR.mat = M.PAVE;
         for (const r of L.recs) {
           const hw = (r.w10 || (CLSW[r.cls] || 8) * 10) / 20;
-          ribbon(mR, r.pts, hw);
+          ribbon(mR, r.pts, hw, -th, -th);
           for (let k = 0; k + 3 < r.pts.length; k += 2) paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
           nR++;
         }
       } else if (L.kind === 3) {
         mW.mat = 0; mW.ea = 0; // fsWater's inland-water look (river, lake, canal, pond); the mesh is just positions
-        for (const r of L.recs) { const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = (k & 1 ? oz : ox) + r.pts[k] / 100; fan(mW, pts, WATER, 1); nW++; }
+        for (const r of L.recs) { const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100; fan(mW, pts, WATER, 1); nW++; }
       } else if (L.kind === 4) {
         mG.mat = M.GROUND; // ground() ignores tint; the polys sit on the shader's lawn, LANDMAP carries the park green
         for (const r of L.recs) {
-          const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = (k & 1 ? oz : ox) + r.pts[k] / 100;
+          const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
           fan(mG, pts, 0.03, 1); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
         }
       } // kind 5 (terrain patches) and unknown kinds: skipped until terrain packs arrive
     }
+    // buildings: one type per tint bucket; LODs run near → far (the cull pass switches up with distance),
+    // so the facade carries slot 0, strips slot 1 and the plain prism slot 2. An empty LOD reuses its
+    // neighbour (identical geometry cross-fades harmlessly). Roofs: caps near, plain fan far.
+    for (const w of city.walls.values()) {
+      const f = w.f.build(), mM = w.m.ni ? w.m.build() : f, mN = w.n.build();
+      put(type([mN, mM, f], K.SOLID, BLOD0, BLOD1, 1e9), tcx, 0, tcz, 1, Q0, w.t);
+    }
+    for (const r of city.roofs.values()) {
+      const f = r.f.build(), mN = r.n.ni ? r.n.build() : f;
+      put(type([mN, f], K.SOLID, BLOD0, 1e9, 1e9), tcx, 0, tcz, 1, Q0, r.t);
+    }
+    if (city.dash && city.dash.ni) put(type([city.dash.build()], K.SOLID, 1e9, 1e9, 380), tcx, 0, tcz, 1, Q0, rgb(1, 1, .96));
     // only register meshes that got geometry (degenerate records — e.g. a pack's zeroed road pts — make none)
-    if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
-    if (nR && mR.ni) put(type([mR.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
-    if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), 0, 0, 0);
-    if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), 0, 0, 0);
+    if (nR && mR.ni) put(type([mR.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
   }
 
   // routing graph, decoded once here (GPS walks it later); absent in country packs
