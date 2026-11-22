@@ -7,8 +7,9 @@ import { transformSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // concatenation order matters. globals before the sh_* files (they interpolate WATER/PULSE/SUN);
-// world builds the scene from the pack (format.js/loader.js), Atlantis's procedural modules are gone
-const FILES = ['math.js', 'quality.js', 'format.js', 'loader.js', 'globals.js', 'sh_base.js', 'sh_scene.js', 'sh_light.js', 'sh_fx.js', 'world.js', 'collide.js', 'main.js', 'music.js'];
+// world builds the scene from the pack (format.js/loader.js), gps sits with the loader, Atlantis's
+// procedural modules are gone
+const FILES = ['math.js', 'quality.js', 'format.js', 'loader.js', 'gps.js', 'globals.js', 'sh_base.js', 'sh_scene.js', 'sh_light.js', 'sh_fx.js', 'world.js', 'collide.js', 'main.js', 'music.js'];
 const dev = process.argv.includes('--dev'), readable = dev || process.argv.includes('--readable'), unpacked = process.argv.includes('--unpacked');
 const out = dev ? 'dev.html' : 'index.html';
 if (dev) FILES.push('dev.js');

@@ -134,6 +134,8 @@
   }).join('\n');
   // land height under "x,z;x,z;...": flat until terrain packs arrive
   window.__ground = () => 'n/a (flat ground)';
+  // gps: advance the simulator by ms and report the vehicle state (position, snapped point, edge, speed)
+  window.__drive = (ms = 0) => { if (ms > 0) simAdvance(ms); return gpsState(); };
   window.__stats = () => PASSES.map((p, i) => `${p} ${gpuMs[i].toFixed(2)}`).join('  ') + `  | total ${gpuMs[NP].toFixed(2)} ms`;
   if (AUTO) tsOn = hasTS;
   window.__ready = true;

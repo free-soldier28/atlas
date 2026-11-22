@@ -152,17 +152,19 @@ if (PK.h.poses) POSES = PK.h.poses; // viewpoints for keys 1-6 come from the pac
 if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through replaces the default lap
 const Wd = await buildWorld(PK);
 landY = Wd.ground; setHard(Wd.hard); setBoxes(Wd.bboxes); // collision ground, old shape lists (empty), building boxes
+const MK = mkMarker(Wd); // vehicle marker: mesh + type + one ALWAYS instance through the world's own type()/put()
 await say('Planting gardens…', 0.7);
 let nV = 0, nIx = 0;
 for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; m.ni = m.ib.length; nV += m.nv; nIx += m.ni; }
 // upload each mesh separately and drop it, so geometry never sits in memory twice (phones)
 const vbMesh = device.createBuffer({ size: max(16, nV * 20), usage: BU.VERTEX | BU.COPY_DST }), ibMesh = device.createBuffer({ size: max(16, nIx * 4), usage: BU.INDEX | BU.COPY_DST });
 for (const m of Wd.meshes) { if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb); if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib); m.vb = m.ib = null; }
-const bInst = buf(new Uint8Array(Wd.inst), BU.STORAGE);
+const bInst = buf(new Uint8Array(Wd.nI * 48 + 48), BU.STORAGE); Q.writeBuffer(bInst, 0, Wd.inst); // extra slot: the vehicle marker
+markerBuf(bInst, MK * 48); gpsStart(); // marker's instance slot; then GPS per the query params
 await ck('geometry');
 // ?types lists every mesh type: kind, instances, triangles per LOD, distances
 if (AUTO && QP.has('types')) console.log(Wd.types.map((t, i) => ((i > 2 && i < 99) || (t.n < 6 && Wd.meshes[t.lods[0]].ni < 9000) || (QP.get('types') === 'big' && i < 135) ? '' : `${i}:k${t.kind} n${t.n} [${t.lods.map((l) => Wd.meshes[l].ni / 3).join('/')}] d${t.d.map((v) => (v > 1e8 ? '-' : v)).join(',')}  `)).join(''));
-if (AUTO) console.log(`${Wd.meshes.length} meshes · ${(nV / 1e6).toFixed(2)} M vertices · ${(nIx / 3e6).toFixed(2)} M triangles · ${Wd.nI} instances · ${((nV * 20 + nIx * 4 + Wd.nI * 48) / 1048576).toFixed(0)} MB`);
+if (AUTO) console.log(`${Wd.meshes.length} meshes · ${(nV / 1e6).toFixed(2)} M vertices · ${(nIx / 3e6).toFixed(2)} M triangles · ${Wd.nI + 1} instances (1 marker) · ${((nV * 20 + nIx * 4 + Wd.nI * 48 + 48) / 1048576).toFixed(0)} MB`);
 // one slot per (mesh type, LOD): a range of the visible list and one indirect draw
 const slots = [], NONE = 0xffffffff;
 const tyData = new ArrayBuffer(Wd.types.length * 48), tyU = new Uint32Array(tyData), tyF = new Float32Array(tyData); // struct MType in sh_scene.js
@@ -178,7 +180,7 @@ const bArgs = [0, 1, 2].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COP
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
 const bgCull = [0, 1, 2].map((v) => group(lCull, [ubo[v], bInst, bTypes, bArgs[v], bVis[v]]));
-const NG_R = ceil(slots.length / 64), NG_C = ceil(Wd.nI / 64);
+const NG_R = ceil(slots.length / 64), NG_C = ceil((Wd.nI + 1) / 64); // +1: the marker instance
 // slot lists per kind; `skip` leaves out types flagged against a view
 const listOf = (kind, skip = 0, need = 0) => new Uint32Array(slots.map((s, i) => (s.kind === kind && !(s.flags & skip) && (s.flags & need) === need ? i : -1)).filter((i) => i >= 0));
 // all / mir: main and mirror views without the ground; gnd / gndMir: the ground, drawn last so covered pixels
@@ -396,6 +398,17 @@ function flyRaw() {
 }
 // camera on the path at F[FLT] (control points evenly spaced in time)
 function flyAt() { let s = F[FLT] / FLYT; s = s < 0 ? 0 : s > 1 ? 1 : s; F[SPL] = s * (FLYN - 1); flyRaw(); }
+// GPS follow camera: 8 m behind the vehicle, 4 m up, looking 25 m ahead along its travel yaw —
+// navigation framing, eased over the same F fields free flight uses (no camera system of its own)
+const follow = (dt) => {
+  if (!VEHICLE.got) return; // live source with no fix yet: keep flying free
+  const v = VEHICLE, x = v.edge >= 0 ? v.sx : v.x, z = v.edge >= 0 ? v.sz : v.z, k = 1 - exp(-dt * 4);
+  F[CX] += (x - sin(v.yaw) * 8 - F[CX]) * k; F[CY] += (v.y + 4 - F[CY]) * k; F[CZ] += (z + cos(v.yaw) * 8 - F[CZ]) * k;
+  const tx = x + sin(v.yaw) * 25, tz = z - cos(v.yaw) * 25;
+  F[YAW] += angd(atan2(tx - F[CX], -(tz - F[CZ])), F[YAW]) * k;
+  F[PIT] += (atan2(v.y - F[CY], hypot(tx - F[CX], tz - F[CZ])) - F[PIT]) * k;
+  F[VX] = F[VY] = F[VZ] = 0;
+};
 resize();
 addEventListener('resize', resize);
 
@@ -569,6 +582,7 @@ function frame(now) {
   F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[CX] = x; F[CY] = y; F[CZ] = z;
   // collision (collide.js); key C disables it
   if (solid) { collide(px, py, pz); x = F[CX]; y = F[CY]; z = F[CZ]; }
+  if (gpsOn) { gpsFrame(dt); follow(dt); } // GPS drives: vehicle update, then the follow camera
   for (let i = 1; i < SLOW; i++) render0(); // ?slow: extra frames drawn and discarded
   render();
   if (hud) {
@@ -585,6 +599,7 @@ const key = (e, v) => {
     default: if (v && !e.repeat) {
       if (e.code === 'KeyH') { hud = !hud; tsOn = hud && hasTS; info.textContent = ''; }
       else if (e.code === 'KeyC') solid = !solid;
+      else if (e.code === 'KeyG') gpsToggle();
       else if (e.code >= 'Digit1' && e.code <= 'Digit6') { const p = POSES[e.code.charCodeAt(5) - 49]; if (p) { lookAt(...p); F[VX] = F[VY] = F[VZ] = 0; } }
     }
   }
@@ -622,10 +637,11 @@ canvas.addEventListener('click', capture);
 document.addEventListener('pointerlockchange', () => { if (!mob) ui(!document.pointerLockElement); });
 // detail buttons: the current level is lit, the others reload with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { try { localStorage.atlas = 2 - i; } catch {} location.href = location.href.replace(/[?&]lv=\d/, ''); }; });
+$('gb').onclick = gpsToggle; // the menu's GPS button toggles like the key
 
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing
 lookAt(...POSES[min(4, POSES.length - 1)]); // the scene opens on the last viewpoint the pack offers (5th by default)
 await say('Letting the light in…', 1);
 render(); await Q.onSubmittedWorkDone();
 setTimeout(() => { keep('atlasLoad', ''); keep('atlasLost', ''); }, 15e3); // the load counts as survived after 15 s
-if (!AUTO) { ui(true); requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); }); } else { body.className = 'g'; window.__ready = true; }
+if (!AUTO) { ui(true); requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); }); } else { body.className = 'g'; window.__ready = true; if (QP.get('gps') === 'sim') gpsAuto(); }

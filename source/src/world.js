@@ -146,5 +146,6 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   PK.graph = await mpkGraph(PK);
 
   const hard = { domes: [], halls: [], villas: [], shapes: [] }; // Atlantis shapes are gone; boxes rule now
-  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes };
+  // type/put: the same closures, exposed so gps.js can add the vehicle marker after the build
+  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put };
 }

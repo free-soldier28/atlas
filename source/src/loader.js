@@ -1,21 +1,43 @@
 // pack loader: where the mpk comes from, and the world lifecycle the engine drives.
 // v0: one pack, embedded (base64, build.mjs --pack=) or fetched. AGENT-STREAM replaces
 // the source with tile-wise range reads and adds LRU/unload; callers use loadPack()/disposeWorld().
+
+// city choice: ?city= wins, else the stored one, else the sample pack
+let CITY = 'sample';
+try { CITY = QP.get('city') || localStorage.atlasCity || CITY; } catch {}
+const PACK_URL = `packs/${CITY}.mpk`;
+let CITIES = null; // manifest entries once packs/manifest.json loads: { cities: [{ id, name, url }] }
 const EMBEDDED_PACK = /*PACK*/null;
-const PACK_URL = QP.get('city') ? `packs/${QP.get('city')}.mpk` : 'packs/sample.mpk';
 let PK = null; // opened pack (mpkOpen result) once loadPack() has run
 
 async function loadPack(url = PACK_URL) {
+  // city menu: the manifest is optional (absent on file:// where fetch cannot read it)
+  try { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } } catch {}
+  const m = CITIES && CITIES.cities.find((c) => c.id === CITY), u = m ? m.url : url;
   let u8;
   if (EMBEDDED_PACK) u8 = Uint8Array.from(atob(EMBEDDED_PACK), (c) => c.charCodeAt(0));
   else {
-    const r = await fetch(url);
-    if (!r.ok) fail(`map pack ${url}: HTTP ${r.status}`);
+    const r = await fetch(u);
+    if (!r.ok) fail(`city pack ${u}: HTTP ${r.status}${CITY !== 'sample' ? ' (menu, City: Sample)' : ''}`);
     u8 = new Uint8Array(await r.arrayBuffer());
   }
   PK = mpkOpen(u8);
   return PK;
 }
+
+// City menu: one button per manifest city, the current one lit; another choice is stored and reloaded
+const mkCities = () => {
+  const el = $('ci');
+  if (!el || !CITIES.cities.length) return;
+  for (const c of CITIES.cities) {
+    const b = document.createElement('button');
+    b.textContent = c.name;
+    if (c.id === CITY) b.className = 'on';
+    else b.onclick = () => { try { localStorage.atlasCity = c.id; } catch {} const h = new URL(location.href); h.searchParams.delete('city'); location.href = h.href; };
+    el.append(b);
+  }
+  el.hidden = false;
+};
 
 // world lifecycle (v0 stubs; AGENT-STREAM owns the real versions)
 // setMode: the two profiles the camera system drives. The overview mode shows the whole
@@ -24,10 +46,21 @@ let MODE = 'street';
 const setMode = (m) => { MODE = m; };
 // vehicle pose entry point: navigation, GPS and the simulator all come through here,
 // lat/lon in degrees (WGS-84), heading in radians from north, clockwise. The world maps
-// it to the local frame and moves the marker + follow camera.
-let VEHICLE = null; // { x, y, z, yaw } local, set by onVehiclePose
+// it to the local frame and moves the marker + follow camera. No allocation: the pose
+// lands in VEHICLE, the conversions share the GEO scratch pair.
+const GEO = new Float64Array(2);
+const VEHICLE = { x: 0, y: 0, z: 0, yaw: 0, sx: 0, sz: 0, edge: -1, got: false }; // sx/sz: snapped point, edge: graph edge
 const geodeticToLocal = (lat, lon) => {
   const [lat0, lon0] = PK.h.origin, k = Math.cos(lat0 * PI / 180) * 111320;
-  return [(lon - lon0) * k, -(lat - lat0) * 111320];
+  GEO[0] = (lon - lon0) * k; GEO[1] = -(lat - lat0) * 111320;
+  return GEO;
 };
-const setVehiclePose = (lat, lon, heading = 0) => { const [x, z] = geodeticToLocal(lat, lon); VEHICLE = { x, y: 0, z, yaw: heading }; };
+const localToGeodetic = (x, z) => {
+  const [lat0, lon0] = PK.h.origin, k = Math.cos(lat0 * PI / 180) * 111320;
+  GEO[0] = lat0 - z / 111320; GEO[1] = lon0 + x / k;
+  return GEO;
+};
+const setVehiclePose = (lat, lon, heading = 0) => {
+  const g = geodeticToLocal(lat, lon);
+  VEHICLE.x = g[0]; VEHICLE.y = 0; VEHICLE.z = g[1]; VEHICLE.yaw = heading; VEHICLE.got = true;
+};
