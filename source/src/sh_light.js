@@ -196,17 +196,21 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   // window glass (g2.a): a bit more mirror than real glass, to read face-on
   let glass = g2.a > .5; let f0 = select(mix(vec3f(.04), alb, metal), vec3f(.085), glass); let dc = alb * (1. - metal);
   var sun = view.sunc.rgb * sh;
-  // under water: moving caustics from the surface, dimmed with depth
-  let r = length(wp.xz); let wl = select(0., ${WATER}, r < 432.); let dep = wl - wp.y;
-  var cz = 0.;
-  if (dep > -2.6 && (r < 432. || wp.y < 2.2)) {
-    // two caustic layers at unrelated scales and angles, warped so they never repeat; mip by pixel size against sizzle
-    let q0 = wp.xz + L.xz * dep * 1.1; let wv = textureSampleLevel(tNoiseA, sRep, q0 / 83., 0.).rg - .5; let q = q0 + wv * 7.;
-    let cl = max(log2(max(dist * view.up.w * view.res.w * 150., 1.)) - ${Math.log2(512 / WAVEPX)}., 0.); // minus a smaller wave tile's missing levels
-    let c1 = textureSampleLevel(tWater, sRep, q / 9.7, cl).b; let c2 = textureSampleLevel(tWater, sRep, vec2f(q.x * .6 + q.y * .8, q.y * .6 - q.x * .8) / 5.3 + .37, cl + .9).b;
-    cz = (c1 * .6 + c2 * .5) * (.8 + .9 * wv.x);
-    // refracted sun is steeper than the maps know: ease shadows
-    if (dep > 0.) { sun = view.sunc.rgb * mix(sh, 1., .7) * (.3 + 1.5 * cz) * exp(-dep * vec3f(.14, .035, .03)); }
+  // under water: moving caustics from the surface, dimmed with depth — the Atlantis sea only
+  // (${SEA}: city packs have no sea plane, and their rivers come through fsWater instead; lighting
+  // dry land as under water gave the whole centre "grass like water" caustic swirls)
+  var cz = 0.; var dep = -1e9;
+  if (${SEA}) {
+    let r = length(wp.xz); let wl = select(0., ${WATER}, r < 432.); dep = wl - wp.y;
+    if (dep > -2.6 && (r < 432. || wp.y < 2.2)) {
+      // two caustic layers at unrelated scales and angles, warped so they never repeat; mip by pixel size against sizzle
+      let q0 = wp.xz + L.xz * dep * 1.1; let wv = textureSampleLevel(tNoiseA, sRep, q0 / 83., 0.).rg - .5; let q = q0 + wv * 7.;
+      let cl = max(log2(max(dist * view.up.w * view.res.w * 150., 1.)) - ${Math.log2(512 / WAVEPX)}., 0.); // minus a smaller wave tile's missing levels
+      let c1 = textureSampleLevel(tWater, sRep, q / 9.7, cl).b; let c2 = textureSampleLevel(tWater, sRep, vec2f(q.x * .6 + q.y * .8, q.y * .6 - q.x * .8) / 5.3 + .37, cl + .9).b;
+      cz = (c1 * .6 + c2 * .5) * (.8 + .9 * wv.x);
+      // refracted sun is steeper than the maps know: ease shadows
+      if (dep > 0.) { sun = view.sunc.rgb * mix(sh, 1., .7) * (.3 + 1.5 * cz) * exp(-dep * vec3f(.14, .035, .03)); }
+    }
   }
   var col = sunBRDF(N, V, dc, f0, rough) * sun;
   // under water light comes through the whole surface: floors glow with caustics even in the wall's shade

@@ -1,7 +1,10 @@
 // global scene constants, interpolated into shaders (WATER, SUN) and used by camera code.
 // Replaces Atlantis's layout.js: no procedural city plan here — the world comes from the pack.
 // POSES/FLY are defaults; a pack's header poses/fly override them at load (world.js).
-const WATER = 0.5; // water plane height in metres (pack layers may override per area)
+const WATER = 0.04; // pack water plane: below roads (0.06) and above green polys (0.03) — streams pass
+// under streets, the river under bridges, and a building's base sits 4 cm into it, not half a metre
+const SEA = false; // the Atlantis sea plane at the origin (its caustics and water glow) — city packs have
+// no sea; terrain packs restore it together with the sea's mesh builder
 const SEA_GROW = 1.034; // kept: the sea swell's fade in sh_scene interpolates from it (terrain packs bring the mesh)
 const SUN = vnorm([-0.91, 0.171, -0.33]); // towards the sun: golden hour, west-north-west
 // towards the moon: ~45 deg up, azimuth opposite the day sun (night profile: main.js bakes a second sky with it)
