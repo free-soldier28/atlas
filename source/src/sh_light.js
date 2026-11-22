@@ -57,12 +57,8 @@ fn aerial(c: vec3f, ro: vec3f, rd: vec3f, d: f32) -> vec3f {
   let ins = mix(skyLut(normalize(vec3f(rd.x, max(rd.y, 0.) + .035, rd.z))), skyLut(normalize(vec3f(-view.sun.z, .1, view.sun.x))) * vec3f(.9, 1., 1.12), .62 * exp(-od * 1.5e-4));
   return c * tr + ins * (1. - exp(-od * 3.3e-4));
 }
-// energy pulse: two rings (the second fainter) running out at 60 m/s, carried by gold inlay, lighting what they pass
-fn pulseK(r: f32, x: f32) -> f32 { return exp(-sq((r - 22. - 60. * x) / 14.)) * ss(0., .35, x); }
-fn pulseAt(r: f32) -> vec3f {
-  let k = (pulseK(r, view.pulse.x) + .55 * pulseK(r, view.pulse.x - .75)) * exp(-r / 420.);
-  return mix(vec3f(1., .88, .66), vec3f(.55, .35, 1.), sat(r / 340.)) * k;
-}
+// the Atlantis energy pulse is retired (map packs have no crystal or inlay podium; its violet ring was the night
+// artefact): main.js parks view.pulse with static values, and the terms below are gone. The View field stays.
 `;
 
 // ambient occlusion (half resolution, GTAO)
@@ -227,13 +223,13 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   var sun = view.sunc.rgb * sh;
   // under water: moving caustics from the surface, dimmed with depth
   let r = length(wp.xz); let wl = select(0., ${WATER}, r < 432.); let dep = wl - wp.y;
-  var cz = 0.; let pu = pulseAt(r);
+  var cz = 0.;
   if (dep > -2.6 && (r < 432. || wp.y < 2.2)) {
     // two caustic layers at unrelated scales and angles, warped so they never repeat; mip by pixel size against sizzle
     let q0 = wp.xz + L.xz * dep * 1.1; let wv = textureSampleLevel(tNoiseA, sRep, q0 / 83., 0.).rg - .5; let q = q0 + wv * 7.;
     let cl = max(log2(max(dist * view.up.w * view.res.w * 150., 1.)) - ${Math.log2(512 / WAVEPX)}., 0.); // minus a smaller wave tile's missing levels
     let c1 = textureSampleLevel(tWater, sRep, q / 9.7, cl).b; let c2 = textureSampleLevel(tWater, sRep, vec2f(q.x * .6 + q.y * .8, q.y * .6 - q.x * .8) / 5.3 + .37, cl + .9).b;
-    cz = (c1 * .6 + c2 * .5) * (.8 + .9 * wv.x) + .35 * lum(pu) * 6.;
+    cz = (c1 * .6 + c2 * .5) * (.8 + .9 * wv.x);
     // refracted sun is steeper than the maps know: ease shadows
     if (dep > 0.) { sun = view.sunc.rgb * mix(sh, 1., .7) * (.3 + 1.5 * cz) * exp(-dep * vec3f(.14, .035, .03)); }
   }
@@ -256,6 +252,9 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   let aoc = max(vec3f(aoA), ((aoA * aa + bb) * aoA + cc) * aoA);
   let nv = max(dot(N, V), 1e-3);
   col += dc * textureSampleLevel(tIrr, sLin, N, 0.).rgb * aoc;
+  // night: a dim blue floor keeps facades and streets readable (mapbox-like dark-blue night); window panes ride
+  // far above it, so the bloom threshold still separates emissives from the moonlit city
+  if (view.night.x > .5) { col += dc * vec3f(.014, .018, .03) * aoA; }
   let R = reflect(rd, N); var so = sat(pow(nv + aoA, exp2(-16. * rough - 1.)) - 1. + aoA) * mix(sv, 1., .3);
   var env = textureSampleLevel(tEnv, sLin, R, rough * 5.).rgb;
   // a recessed pane still mirrors what's in front: the reveal dims it only a little
@@ -266,11 +265,9 @@ fn shafts(fc: vec2f, z: f32, rd: vec3f) -> vec3f {
   // Street lamps (planned, no meshes yet) enter here too: heads are K.SOLID instances of M.ALLOY whose G-buffer
   // gains an emissive flag like the panes', and their ground pools are a distance fall-off added next to this term.
   if (glass && view.night.x > .5) { col += alb * 9.; }
-  // the crystal's own light, close by: breathing and flaring with the pulse
+  // the crystal's own light, close by (map packs register none)
   let lc = vec3f(0., 60., 0.) - wp; let dl = dot(lc, lc);
-  col += dc * vec3f(.75, .9, 1.) * (.5 + .5 * view.pulse.y + 1.6 * view.pulse.z) * 28. / (dl + 90.) * sat(dot(N, lc) * inverseSqrt(dl) * .7 + .3) * ao;
-  // the pulse runs along gold inlay and sweeps a ring of light near the ground
-  col += pu * g0.a * 9. + dc * pu * .55 * exp(-max(wp.y - 12., 0.) / 40.) * (.4 + .6 * ao);
+  col += dc * vec3f(.75, .9, 1.) * .5 * 28. / (dl + 90.) * sat(dot(N, lc) * inverseSqrt(dl) * .7 + .3) * ao;
   return vec4f(aerial(col, view.cam.xyz, rd, dist) + shafts(fc.xy, z, rd), 1.);
 }
 `;

@@ -9,9 +9,10 @@ const SUN = vnorm([-0.91, 0.171, -0.33]); // towards the sun: golden hour, west-
 const NIGHT_SUN = vnorm([-SUN[0], 1, -SUN[2]]);
 const MOONTINT = [0.8, 0.9, 1.2]; // moonlight colour: red cut, blue lifted
 // night bake scales vs the day bake. Strict physics (moonlight 1/4e4 of the sun) renders black under AgX at the night
-// exposure (see main.js): these are art-directed, in film-night territory.
-const MOONGROUND = 8e-3; // moon illuminance at the ground, x E0
-const MOONSKY = 8e-3;    // the night sky table's brightness vs its march output
+// exposure (see main.js): these are art-directed film-night levels, tuned so streets and facades read dark-blue
+// while the sky stays near-black (the light pass adds a small blue ambient floor on top of the direct moon).
+const MOONGROUND = 2e-2; // moon illuminance at the ground, x E0 (~1/60 of the day sun)
+const MOONSKY = 1.4e-2;  // the night sky table's brightness vs its march output
 const angd = (a, b) => { let d = (a - b) % TAU; if (d > PI) d -= TAU; if (d < -PI) d += TAU; return d; };
 // default viewpoints (keys 1-6): pack header.poses replaces this array at load (`let`: main.js swaps it in)
 let POSES = [

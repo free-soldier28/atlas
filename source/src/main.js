@@ -495,14 +495,13 @@ function render() {
   for (let i = 0; i < 16; i++) { U[32 + i] = PVP[i]; PVP[i] = U[i]; }
   setCam(U, cx, cy, cz, F[YAW], F[PIT], W, H, JIT[j] * 2 / W, JIT[j + 1] * 2 / H);
   U[O_CAM + 3] = t; U[O_JIT + 2] = fr; U[O_JIT + 3] = -1e9;
-  // heartbeat: x = seconds since the last pulse, y = slow crystal breathing, z = flare as each pulse leaves
-  const tp = t % PULSE, tq = (tp < PULSE / 2 ? tp : tp - PULSE) / 0.7;
-  U[O_PULSE] = tp; U[O_PULSE + 1] = 0.5 + 0.5 * sin(t * TAU / 7); U[O_PULSE + 2] = exp(-tq * tq);
+  // the Atlantis energy pulse is retired in the map app: static values park its rings infinitely far (x = 1e6) and
+  // zero the breathing, flare and mirror weight — otherwise the night city flashed violet every 12 s
+  U[O_PULSE] = 1e6; U[O_PULSE + 1] = 0; U[O_PULSE + 2] = 0; U[O_PULSE + 3] = 0;
   U[O_MISC] = F[RESET]; U[O_MISC + 1] = 0; U[O_MISC + 2] = LODK; U[O_MISC + 3] = 1; U[O_LODC] = cx; U[O_LODC + 1] = cy; U[O_LODC + 2] = cz; U[O_LODC + 3] = 1 / LODK;
-  // canal mirror only when canal water is in view and the camera is low enough (fades 170-235 m)
+  // the canal mirror is off for good (quality.js); mir stays 0 and the mirror-view passes never run
   let mir = MIRROR ? 1 - sstep(170, 235, cy) : 0;
   for (let k = 0; k < 5; k++) { const o = O_PL + k * 4; if (U[o + 1] * WATER + U[o + 3] < -445) mir = 0; }
-  U[O_PULSE + 3] = mir;
   if (CASC) {
     // cascade: a 92 m box around the point 36 m ahead of the camera
     shadowMat(O_SM, cx + U[O_FWD] * 36, cy + U[O_FWD + 1] * 36, cz + U[O_FWD + 2] * 36, 46, -420, 700, CASC, true);

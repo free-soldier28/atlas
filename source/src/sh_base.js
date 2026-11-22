@@ -290,9 +290,10 @@ fn skyLut(d: vec3f) -> vec3f {
   let uv = vec2f(az / (2. * PI) + .5, clamp(.5 + .5 * sign(el) * sqrt(abs(el) / (PI * .5)), .004, .996));
   // lifted towards the zenith (single scattering alone is too dark overhead)
   var c = textureSampleLevel(tSky, sRep, uv, 0.).rgb * E0 * mix(1., 1.8, sat(d.y * 1.4) * (1. - ss(.5, .97, dot(d, view.sun.xyz))));
-  // pearl just above the horizon, warming to cream and gold (and higher) towards the low sun
+  // pearl just above the horizon, warming to cream and gold (and higher) towards the low sun; mostly off at night,
+  // where its warm cast reads as a strange red-brown band over the moonlit horizon
   let ts = ss(-.35, .95, dot(d.xz / max(length(d.xz), 1e-4), normalize(view.sun.xz)));
-  let l = lum(c); c = mix(c, vec3f(l) * mix(vec3f(1.03, 1., .99), vec3f(1.2, 1., .72), ts) * 1.12, mix(.8, .9, ts) * (1. - ss(0., mix(.16, .3, ts), abs(d.y))));
+  let l = lum(c); c = mix(c, vec3f(l) * mix(vec3f(1.03, 1., .99), vec3f(1.2, 1., .72), ts) * 1.12, mix(.8, .9, ts) * (1. - ss(0., mix(.16, .3, ts), abs(d.y))) * (1. - .8 * view.night.x));
   return c;
 }
 // small cumulus on a flat layer 1.7 km up; lit sunward, grey-blue below
