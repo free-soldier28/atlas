@@ -10,10 +10,10 @@ const cos0 = Math.cos(ORIGIN[0] * Math.PI / 180);
 const XLO = (BBOX[1] - ORIGIN[1]) * cos0 * 111320, XHI = (BBOX[3] - ORIGIN[1]) * cos0 * 111320; // metres
 const ZLO = Math.min(-(BBOX[2] - ORIGIN[0]) * 111320, -(BBOX[0] - ORIGIN[0]) * 111320);
 const ZHI = Math.max(-(BBOX[2] - ORIGIN[0]) * 111320, -(BBOX[0] - ORIGIN[0]) * 111320);
-const MARGIN = 2000 * 100;  // 2 km in cm: every record's anchor (first point, its tile assignment) stays in bbox+margin
-const HARD = 40000 * 100;   // 40 km: projection-bug net. `out geom` returns FULL way geometry, so long
-                            // cross-boundary ways (rivers, motorways) legitimately keep tails far past the
-                            // bbox; the engine renders per-tile meshes unclipped and the GPU clips the rest.
+const MARGIN = 2000 * 100 + 2; // 2 km + 1 cm float slack. The builder clips content to bbox+2 km
+                               // (`out geom` returns full way geometry, tails are cut), so every
+                               // stored point — anchor or not — must sit inside bbox ± 2 km.
+const HARD = 40000 * 100;      // 40 km: projection-bug net (defense in depth)
 
 test('grodno.mpk: header, tiles present', async () => {
   const P = await openPack(false);
@@ -54,17 +54,13 @@ test('grodno.mpk: every tile decodes, record shapes sane', async () => {
           layer.kind === 3 ? nW++ : nG++;
           assert.ok(even >= 4, `kind ${layer.kind} record with ${even / 2} pts`);
         } else assert.fail(`unexpected layer kind ${layer.kind}`);
-        // coordinates: unfold tile-local cm → pack-local cm. Anchor (first pt) within bbox ± 2 km;
-        // every pt within the projection-bug net (tails of long cross-boundary ways extend further).
-        {
-          const ax = tx * 512 * 100 + r.pts[0], az = tz * 512 * 100 + r.pts[1];
-          assert.ok(ax >= (XLO * 100 - MARGIN) && ax <= (XHI * 100 + MARGIN), `anchor x ${ax / 100 | 0} m out of bbox+margin`);
-          assert.ok(az >= (ZLO * 100 - MARGIN) && az <= (ZHI * 100 + MARGIN), `anchor z ${az / 100 | 0} m out of bbox+margin`);
-        }
+        // coordinates: unfold tile-local cm → pack-local cm; content is clipped to bbox ± 2 km,
+        // so every stored point must sit inside that (the ±40 km net catches projection bugs).
         for (let j = 0; j < even; j += 2) {
           const x = tx * 512 * 100 + r.pts[j], z = tz * 512 * 100 + r.pts[j + 1];
-          assert.ok(x >= (XLO * 100 - HARD) && x <= (XHI * 100 + HARD), `x ${x / 100 | 0} m wildly out of bbox (projection bug?)`);
-          assert.ok(z >= (ZLO * 100 - HARD) && z <= (ZHI * 100 + HARD), `z ${z / 100 | 0} m wildly out of bbox (projection bug?)`);
+          assert.ok(x >= (XLO * 100 - MARGIN) && x <= (XHI * 100 + MARGIN), `x ${x / 100 | 0} m out of bbox+2km`);
+          assert.ok(z >= (ZLO * 100 - MARGIN) && z <= (ZHI * 100 + MARGIN), `z ${z / 100 | 0} m out of bbox+2km`);
+          assert.ok(x >= (XLO * 100 - HARD) && x <= (XHI * 100 + HARD) && z >= (ZLO * 100 - HARD) && z <= (ZHI * 100 + HARD), 'wildly out of bbox (projection bug?)');
         }
       }
     }

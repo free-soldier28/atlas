@@ -23,7 +23,7 @@ const L = (lat, lon) => geoToLocal(lat, lon, ORIGIN[0], ORIGIN[1]); // → [x ea
 // ---------- tag interpretation ----------
 
 // first number of "12 m" / "12.5" / "12,5" → metres, NaN if absent
-const num = (t) => { const m = /-?\d+(?:[.,]\d+)?/.exec(String(t)); return m ? parseFloat(m[1].replace(',', '.')) : NaN; };
+const num = (t) => { const m = /-?\d+(?:[.,]\d+)?/.exec(String(t)); return m ? parseFloat(m[0].replace(',', '.')) : NaN; };
 
 const RESIDENTIAL = new Set(['house', 'detached', 'residential', 'apartments', 'semidetached_house', 'terrace', 'terraced_house', 'duplex', 'bungalow', 'dormitory', 'residential;apartments']);
 const LEVELS_TALL = new Set(['office', 'retail', 'commercial', 'industrial', 'public', 'church']); // × 3.6 m/level
@@ -78,7 +78,8 @@ const RCLS = { // highway value → class (docs/mpk-format.md)
   secondary: 3, secondary_link: 3, tertiary: 4, tertiary_link: 4,
   residential: 5, living_street: 5, unclassified: 6, service: 7, pedestrian: 8,
   footway: 9, cycleway: 9, track: 9, bridleway: 9, steps: 10, path: 10,
-};
+  corridor: 10, raceway: 7, // rare values, folded into the nearest class
+}; // construction / proposed / planned are not real roads: skipped (counted)
 const WDEF = { 0: 30, 1: 24, 2: 18, 3: 14, 4: 11, 5: 8, 6: 6.5, 7: 5, 8: 4, 9: 2, 10: 1.5 }; // class default width, m
 const SDEF = { 0: 110, 1: 90, 2: 60, 3: 50, 4: 50, 5: 40, 6: 40 };                          // class default speed, km/h
 const drivable = (cls) => cls <= 6; // service (7) and up render but do not route
@@ -99,6 +100,76 @@ const closedRing = (g) => g.length >= 4 && g[0].lat === g[g.length - 1].lat && g
 // ring points in local metres, closing duplicate dropped
 const ringPts = (g) => { const pts = []; for (const p of g) { if (!p) return null; pts.push(...L(p.lat, p.lon)); } pts.length -= 2; return pts; };
 const linePts = (g) => { const pts = []; for (const p of g) { if (!p) return null; pts.push(...L(p.lat, p.lon)); } return pts; };
+
+// clip to the bbox + 2 km: `out geom` returns FULL way geometry, so long cross-boundary ways
+// (rivers, motorways) carry tails far past the pack's bbox. Tiles only exist inside the bbox,
+// so the pack stores exactly the clipped content; the routing graph below keeps full geometry.
+const M2 = 2000;
+const BXLO = (BBOX[1] - ORIGIN[1]) * Math.cos(ORIGIN[0] * Math.PI / 180) * 111320 - M2, BXHI = (BBOX[3] - ORIGIN[1]) * Math.cos(ORIGIN[0] * Math.PI / 180) * 111320 + M2;
+const BZLO = -(BBOX[2] - ORIGIN[0]) * 111320 - M2, BZHI = -(BBOX[0] - ORIGIN[0]) * 111320 + M2;
+const snap = (v) => Math.round(v * CM) / CM; // clip boundary points land exactly on the cm grid
+
+// Liang–Barsky: visible parameter range [t0, t1] of segment a→b against the clip rect, or null
+function segClip(ax, az, bx, bz) {
+  let t0 = 0, t1 = 1;
+  const dx = bx - ax, dz = bz - az;
+  const P = [-dx, ax - BXLO, dx, BXHI - ax, -dz, az - BZLO, dz, BZHI - az];
+  for (let i = 0; i < 8; i += 2) {
+    const p = P[i], q = P[i + 1];
+    if (p === 0) { if (q < 0) return null; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; }
+    else { if (r < t0) return null; if (r < t1) t1 = r; }
+  }
+  return t0 <= t1 ? [t0, t1] : null;
+}
+
+// polyline → runs of ≥2 points inside the rect (crossings interpolated to the rect edge)
+function clipLine(pts) {
+  const runs = [];
+  let cur = null;
+  const endRun = () => { if (cur && cur.length >= 4) runs.push(cur); cur = null; };
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const ax = pts[i], az = pts[i + 1], bx = pts[i + 2], bz = pts[i + 3];
+    const vis = segClip(ax, az, bx, bz);
+    if (!vis) { endRun(); continue; }
+    const [t0, t1] = vis;
+    const ex = snap(ax + (bx - ax) * t0), ez = snap(az + (bz - az) * t0);
+    const lx = snap(ax + (bx - ax) * t1), lz = snap(az + (bz - az) * t1);
+    if (!cur) cur = [ex, ez];
+    else if (cur[cur.length - 2] !== ex || cur[cur.length - 1] !== ez) { endRun(); cur = [ex, ez]; }
+    if (cur[cur.length - 2] !== lx || cur[cur.length - 1] !== lz) cur.push(lx, lz);
+    if (t1 < 1) endRun();
+  }
+  endRun();
+  return runs;
+}
+
+// Sutherland–Hodgman: ring (flat pts, not repeat-closed) → [clippedRing] | [] (identity if inside)
+function clipRing(pts) {
+  let inside = true;
+  for (let i = 0; i < pts.length && inside; i += 2) if (pts[i] < BXLO || pts[i] > BXHI || pts[i + 1] < BZLO || pts[i + 1] > BZHI) inside = false;
+  if (inside) return [pts];
+  let out = pts;
+  for (const edge of [
+    { in: (x) => x >= BXLO, ix: (ax, az, bx, bz) => [BXLO, az + (bz - az) * (BXLO - ax) / (bx - ax)] },
+    { in: (x) => x <= BXHI, ix: (ax, az, bx, bz) => [BXHI, az + (bz - az) * (BXHI - ax) / (bx - ax)] },
+    { in: (x, z) => z >= BZLO, ix: (ax, az, bx, bz) => [ax + (bx - ax) * (BZLO - az) / (bz - az), BZLO] },
+    { in: (x, z) => z <= BZHI, ix: (ax, az, bx, bz) => [ax + (bx - ax) * (BZHI - az) / (bz - az), BZHI] },
+  ]) {
+    const inp = out;
+    out = [];
+    const n = inp.length / 2;
+    for (let i = 0; i < n; i++) {
+      const ax = inp[i * 2], az = inp[i * 2 + 1], bx = inp[((i + 1) % n) * 2], bz = inp[((i + 1) % n) * 2 + 1];
+      const ain = edge.in(ax, az), bin = edge.in(bx, bz);
+      if (ain) { out.push(ax, az); if (!bin) { const [x, z] = edge.ix(ax, az, bx, bz); out.push(snap(x), snap(z)); } }
+      else if (bin) { const [x, z] = edge.ix(ax, az, bx, bz); out.push(snap(x), snap(z)); }
+    }
+    if (out.length < 6) return [];
+  }
+  return out.length >= 6 ? [out] : [];
+}
 
 // pack-local metres → tile-local Int32 cm, assigned by the record's first point
 const tiles = new Map(); // "tx,tz" → { tx, tz, b, r, w, g }
@@ -128,7 +199,7 @@ for (const el of buildingsEls) {
   emittedWayIds.add(el.id);
   const pts = ringPts(g);
   if (!pts || pts.length < 6) continue;
-  assign(pts, 'b', buildingRec(el.tags));
+  for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags));
 }
 stats.relBuildings = buildingsEls.filter((e) => e.type === 'relation').length;
 // building multipolygon relations: v1 = outer rings only, inner rings (holes) dropped
@@ -143,7 +214,7 @@ for (const el of buildingsEls) {
     stats.relOuterRings++;
     const pts = ringPts(m.geometry);
     if (!pts || pts.length < 6) continue;
-    assign(pts, 'b', buildingRec(el.tags));
+    for (const ring of clipRing(pts)) assign(ring, 'b', buildingRec(el.tags));
   }
 }
 
@@ -167,8 +238,9 @@ for (const el of roadsEls) {
   const width = !isNaN(num(t.width)) ? num(t.width) : !isNaN(num(t.lanes)) ? num(t.lanes) * 3.5 + 2 : WDEF[cls];
   const speed = isNaN(num(t.maxspeed)) ? SDEF[cls] : num(t.maxspeed);
   const rec = { cls, flags: oneway === -1 ? 1 : oneway, name: t.name || undefined, lanes, w10: Math.round(width * 10) };
-  assign(pts, 'r', rec);
-  stats.roadRecs++;
+  const runs = clipLine(pts); // split at the bbox+2km edge; the graph below keeps the full way
+  for (const run of runs) assign(run, 'r', rec);
+  stats.roadRecs += runs.length;
   if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed });
 }
 
@@ -212,13 +284,15 @@ for (const el of waterEls) {
       if (!closedRing(g)) { stats.waterSkipped++; continue; }
       const pts = ringPts(g);
       if (!pts || pts.length < 6) { stats.waterSkipped++; continue; }
-      assign(pts, 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
-      stats.waterPoly++;
+      const rings = clipRing(pts);
+      for (const ring of rings) assign(ring, 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
+      stats.waterPoly += rings.length;
     } else if (WLINE[t.waterway] !== undefined) {
       const pts = linePts(g);
       if (!pts || pts.length < 4) { stats.waterSkipped++; continue; }
-      assign(pts, 'w', { kind: WLINE[t.waterway] });
-      stats.waterLine++;
+      const runs = clipLine(pts);
+      for (const run of runs) assign(run, 'w', { kind: WLINE[t.waterway] });
+      stats.waterLine += runs.length;
     } else stats.waterSkipped++; // ditch / drain / other waterways: skipped in v1
   } else if (el.type === 'relation' && el.members) { // water multipolygons: outer rings only (v1)
     for (const m of el.members) {
@@ -226,7 +300,7 @@ for (const el of waterEls) {
       if (!closedRing(m.geometry)) { stats.relOuterOpen++; continue; }
       const pts = ringPts(m.geometry);
       if (!pts || pts.length < 6) continue;
-      assign(pts, 'w', { kind: waterPolyKind(t) });
+      for (const ring of clipRing(pts)) assign(ring, 'w', { kind: waterPolyKind(t) });
       stats.waterPoly++;
     }
   }
@@ -240,8 +314,9 @@ for (const el of greenEls) {
   const pts = ringPts(el.geometry);
   if (!pts || pts.length < 6) { stats.greenSkipped++; continue; }
   const kind = t.leisure === 'park' ? 0 : t.landuse === 'forest' ? 1 : (t.landuse === 'grass' || t.landuse === 'meadow') ? 2 : 3; // 0 park, 1 forest, 2 grass, 3 other
-  assign(pts, 'g', { kind });
-  stats.greenRecs++;
+  const rings = clipRing(pts);
+  for (const ring of rings) assign(ring, 'g', { kind });
+  stats.greenRecs += rings.length;
 }
 
 // ---------- poses: 6 real Grodno viewpoints (local metres via geoToLocal) ----------
