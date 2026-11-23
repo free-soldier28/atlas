@@ -185,7 +185,13 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   // tiles: the finest LOD each carries (coarser ones arrive with country packs and streaming).
   // Every tile mesh is centre-local and its instance sits at the tile centre, so the cull pass gets a
   // ~360 m bounding radius per tile — the LOD switches and the frustum test both work per tile.
+  // tile inflation is async (DecompressionStream), meshing is sync: inflate the next batch while
+  // the current one is being generated, 24 streams at a time (980 sequential awaits cost ~0.45 s)
+  const TB = 24;
+  const prefetch = (b) => Promise.all(PK.h.tiles.slice(b, b + TB).map((_, k) => mpkTile(PK, b + k)));
+  let incoming = prefetch(0);
   for (let i = 0; i < PK.h.tiles.length; i++) {
+    if (i % TB === 0 && i) await incoming; // the batch we are about to mesh must be inflated
     const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S, th = S / 2, tcx = ox + th, tcz = oz + th;
     // building holes (layer kind 6, docs/mpk-format.md): group by parent osmId — the matching
     // relation-provenance buildings carve their roofs with them and wall the rings (courtyards)
@@ -292,6 +298,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz); // bridge concrete
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    if ((i + 1) % TB === 0 && i + 1 < PK.h.tiles.length) incoming = prefetch(i + 1);
   }
 
   // routing graph, decoded once here (GPS walks it later); absent in country packs

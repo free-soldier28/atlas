@@ -148,14 +148,16 @@ const tEnv = tex(256, 256, HDR, RT, { layers: 6, mips: 6 }), tEnvN = tex(256, 25
 const tIrr = tex(16, 16, HDR, RT, { layers: 6 }), tIrrN = tex(16, 16, HDR, RT, { layers: 6 });
 const cubeView = (t, o = {}) => t.createView({ dimension: 'cube', ...o });
 const cvEnv = cubeView(tEnv), cvIrr = cubeView(tIrr), cvEnvN = cubeView(tEnvN), cvIrrN = cubeView(tIrrN);
-const bakeSkyEnv = async (at, sun, label, tS, tER, tE, tI) => {
-  // the bake reads view.sun/sunc/night (sky azimuth, ground bounce, stars): the caller sets them per profile
+const bakeSkyEnv = (at, sun, label, tS, tER, tE, tI) => {
+  // the bake reads view.sun/sunc/night (sky azimuth, ground bounce, stars): the caller sets them per profile.
+  // One submit per profile and ONE sync at the end — the old per-pass ck() serialized ~18 GPU waits;
+  // render passes inside a submit are ordered and WebGPU inserts the texture barriers between them.
   const ms = mod(W_SKYLUT(at, sun, sun === NIGHT_SUN ? MOONSKY : 1, sun === NIGHT_SUN ? MOONTINT : [1, 1, 1]), 'skylut');
   let e = device.createCommandEncoder();
-  const flush = async (m) => { Q.submit([e.finish()]); await ck(m); e = device.createCommandEncoder(); };
+  const bufs = [], flush = () => { bufs.push(e.finish()); e = device.createCommandEncoder(); };
   let r = e.beginRenderPass({ colorAttachments: [colorAtt(tS.createView(), true)] });
   r.setPipeline(device.createRenderPipeline({ layout: 'auto', vertex: { module: ms, entryPoint: 'vs' }, fragment: { module: ms, entryPoint: 'fs', targets: [{ format: HDR }] } })); r.draw(3); r.end();
-  Q.writeBuffer(ubo[V_MAIN], 0, UB[V_MAIN]); await flush(label + 'sky table');
+  Q.writeBuffer(ubo[V_MAIN], 0, UB[V_MAIN]); flush();
   const lEnv = layout('ussttk', VF), me = mod(W_ENV, 'env');
   const pEnv = device.createRenderPipeline({ layout: plOf(lEnv), vertex: { module: me, entryPoint: 'vs' }, fragment: { module: me, entryPoint: 'fs', targets: [{ format: HDR }] } });
   const face = (t, f, m) => t.createView({ dimension: '2d', baseArrayLayer: f, arrayLayerCount: 1, baseMipLevel: m, mipLevelCount: 1 });
@@ -163,13 +165,16 @@ const bakeSkyEnv = async (at, sun, label, tS, tER, tE, tI) => {
   // raw sky into mip 0 (the bound source is a stand-in mode 0 never samples), then its mips
   for (let f = 0; f < 6; f++) pass(tER, f, 0, 0, cubeView(tI));
   for (let m = 1; m < 9; m++) for (let f = 0; f < 6; f++) pass(tER, f, m, 1, cubeView(tER, { baseMipLevel: m - 1, mipLevelCount: 1 }));
-  await flush(label + 'sky cube');
-  for (let m = 0; m < 6; m++) { for (let f = 0; f < 6; f++) pass(tE, f, m, 2 + m, cubeView(tER)); await flush(label + 'sky cube, roughness ' + m); }
+  flush();
+  for (let m = 0; m < 6; m++) { for (let f = 0; f < 6; f++) pass(tE, f, m, 2 + m, cubeView(tER)); flush(); }
   for (let f = 0; f < 6; f++) pass(tI, f, 0, 9, cubeView(tER));
-  await flush(label + 'sky irradiance');
+  flush();
+  Q.submit(bufs);
+  return ck(label + 'sky and env'); // promise — awaited later, after the CPU world build has started
 };
-setViewSun(UB[V_MAIN], 0); await bakeSkyEnv(AT, SUN, '', tSky, tEnvRaw, tEnv, tIrr);
-setViewSun(UB[V_MAIN], 1); await bakeSkyEnv(ATN, NIGHT_SUN, 'night ', tSkyN, tEnvRawN, tEnvN, tIrrN);
+// both profiles are submitted before the pack load: the GPU bakes while buildWorld runs on the CPU
+setViewSun(UB[V_MAIN], 0); const skyDay = bakeSkyEnv(AT, SUN, '', tSky, tEnvRaw, tEnv, tIrr);
+setViewSun(UB[V_MAIN], 1); const skyNight = bakeSkyEnv(ATN, NIGHT_SUN, 'night ', tSkyN, tEnvRawN, tEnvN, tIrrN);
 setViewSun(UB[V_MAIN], night);
 
 // the world: meshes, instances, levels of detail
@@ -719,6 +724,8 @@ const geoFix = () => new Promise((res) => {
     res(null);
   }, { timeout: 4000, enableHighAccuracy: true, maximumAge: 30000 });
 });
+// fire the request now: its 4 s budget overlaps world building instead of blocking __ready
+const fixP = geoFix();
 // far outside the pack's bounding box (> 3 km past an edge): the fix is useless for framing the city
 const outside = (lat, lon) => {
   const b = PK.h.bbox; if (!b) return false;
@@ -781,16 +788,16 @@ const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
 colUI(); winUI(); numUI(); streetUI();
 
-// start camera: above the user's position when geolocation answers within its 4 s budget (a fix far outside
-// the pack counts as no fix), else the pack's first viewpoint. Placement only — no follow camera, no marker.
-const fix = await geoFix();
-if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
-else {
-  lookAt(...POSES[0]);
-  F[VX] = F[VY] = F[VZ] = 0;
-  if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);
-}
+// start camera: the pack's first viewpoint immediately. The geolocation request started while the
+// world was being built; when it answers, a usable fix moves the camera once (never blocks startup).
+lookAt(...POSES[0]);
+F[VX] = F[VY] = F[VZ] = 0;
+if (!AUTO) fixP.then((fix) => { // probes keep the deterministic pack viewpoint
+  if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
+  else if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);
+});
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing
+await skyDay; await skyNight; // both bakes were submitted before buildWorld — normally already done
 await say('Letting the light in…', 1);
 render(); await Q.onSubmittedWorkDone();
 setTimeout(() => { keep('atlasLoad', ''); keep('atlasLost', ''); }, 15e3); // the load counts as survived after 15 s
