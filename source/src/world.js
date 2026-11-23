@@ -332,9 +332,9 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
   // thousand triangles, baked once into the far maps instead of leaving the horizon shadowless.
   const buildShadowProxy = () => {
     const mb = new MB(1 << 16); mb.mat = M.PLASTER;
-    const TILES = planTileData || PK.tiles;
+    const TILES = planTileData || PK.tiles, at = (i) => TILES.get ? TILES.get(i) : TILES[i];
     for (let i = 0; i < PK.h.tiles.length; i++) {
-      const T = TILES[i]; if (!T) continue;
+      const T = at(i); if (!T) continue;
       const ox = PK.h.tiles[i][0] * S, oz = PK.h.tiles[i][1] * S;
       for (const L of T.lods.flat()) if (L.kind === 1) for (const r of L.recs) {
         const n = r.pts.length >> 1; if (n < 3) continue;

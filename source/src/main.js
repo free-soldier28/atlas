@@ -237,7 +237,8 @@ const bArgs = [0, 1].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COPY_S
 // Lazy filler: upload each finished tile into the slot block reserved by the plan pass, refresh
 // its instance rows (the radii are real now) and switch its indirect draws on. Everything above is
 // static, so the cull/shadow/render pipelines and bind groups never need rebuilding.
-let rebakeShadows = null, rebaked = false;
+let rebakeShadows = null, rebaked = false, shadowBaking = 0;
+window.__shadowIdle = () => new Promise((res) => { const f = () => shadowBaking ? setTimeout(f, 50) : res(true); f(); });
 const startFill = () => {
   if (!Wd.lazy) return;
   const arg = new Uint32Array(5), total = Wd.focusOrder.length;
@@ -354,7 +355,7 @@ await ck('scene pipelines');
 await say('Casting shadows…', 0.8);
 // sizes: SHN in quality.js; with no cascade one texel stands in
 const D16 = 'depth16unorm', DFAR = SH32 ? DEPTH : D16;
-const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
+const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT | TU.COPY_SRC), tex(SHN[2], SHN[2], DFAR, RT | TU.COPY_SRC), tex(SHN[3], SHN[3], DFAR, RT | TU.COPY_SRC)];
 // One set of baked maps for both profiles: the sun turns with N, so the maps are re-baked on a
 // switch (a short hitch) instead of holding a second 40+ MB set resident. The camera cascade is shared.
 const tShN = tSh;
@@ -419,6 +420,8 @@ const castProxy = async (t, R, A = LR, B = LU) => {
 // one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main
 // matrix alone, so the frames of the active profile stay right while the other profile fills its textures
 const bakeShadowMaps = async (dst) => {
+  shadowBaking++;
+  try {
   const U = UB[V_SH]; U[O_MISC + 1] = 2; U[O_MISC + 2] = 0; U[O_MISC + 3] = 0; U[O_LODC] = 0; U[O_LODC + 1] = 0; U[O_LODC + 2] = 0;
   // each map draws only what lies inside its own box seen from the sun (planes set by shadowMat). Medium/Low never cast
   // at the finest LOD (lodb): a 23 cm texel can't tell them apart.
@@ -426,6 +429,7 @@ const bakeShadowMaps = async (dst) => {
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, 480); await Q.onSubmittedWorkDone();
   shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castProxy(dst[2], 1400); await Q.onSubmittedWorkDone();
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castProxy(dst[3], 6800); await Q.onSubmittedWorkDone();
+  } finally { shadowBaking--; }
 };
 const tShT0 = performance.now();
 // Build the full-city silhouette before the first bake, in every mode: lazy mode otherwise leaves
@@ -437,6 +441,29 @@ if (Wd.buildShadowProxy) {
   if (QP.has('log')) console.log(`shadow proxy: ${(mesh.ni / 3000).toFixed(0)}k triangles, ${((performance.now() - t0) / 1000).toFixed(2)} s`);
 }
 await bakeShadowMaps(tSh);
+// Regression hook: sample the baked maps. An empty map is a constant clear value (variance 0),
+// so a dropped proxy or a skipped bake is caught without eyeballing screenshots.
+window.__shadowStats = async () => {
+  const out = {};
+  for (const k of [1, 2, 3]) {
+    const t = tSh[k], f32 = k >= 2 && SH32, bpe = f32 ? 4 : 2;
+    // WebGPU requires a whole-subresource copy for depth formats — sample the centre afterwards.
+    const bpr = Math.ceil(t.width * bpe / 256) * 256;
+    const buf = device.createBuffer({ size: bpr * t.height, usage: BU.COPY_DST | BU.MAP_READ });
+    const e = device.createCommandEncoder();
+    e.copyTextureToBuffer({ texture: t }, { buffer: buf, bytesPerRow: bpr }, [t.width, t.height, 1]);
+    Q.submit([e.finish()]); await buf.mapAsync(GPUMapMode.READ);
+    const a = f32 ? new Float32Array(buf.getMappedRange()) : new Uint16Array(buf.getMappedRange());
+    const stride = bpr / bpe; let mn = Infinity, mx = -Infinity, s = 0, s2 = 0, n = 0;
+    // sample the whole map with a stride, not just the centre: a valid night map may put its
+    // casters away from the centre for a different sun direction.
+    const step = 8;
+    for (let j = 0; j < t.height; j += step) for (let i = 0; i < t.width; i += step) { const v = a[j * stride + i]; mn = min(mn, v); mx = max(mx, v); s += v; s2 += v * v; n++; }
+    buf.unmap(); const mean = s / n;
+    out[k] = { min: +mn.toFixed(4), max: +mx.toFixed(4), variance: +(s2 / n - mean * mean).toFixed(4) };
+  }
+  return out;
+};
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
 // lazy tiles arrive after those maps were baked; once the queue drains, bake the active profile
 // again so distant casters are present. The same helper fills the inactive profile at night switches.

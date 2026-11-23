@@ -35,7 +35,7 @@ ws.onmessage = (e) => {
   if (pend.has(m.id)) { const p = pend.get(m.id); pend.delete(m.id); m.error ? p.rej(new Error(m.error.message)) : p.res(m); }
 };
 await send('Runtime.enable'); await send('Page.enable');
-const ev = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.result?.value;
+const ev = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.result?.exceptionDetails) { console.log('EVAL EXC ' + (r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text).slice(0, 400)); return undefined; } return r.result?.result?.value; };
 await send('Page.navigate', { url: `${BASE}/dev.html?auto&lv=2&log&pool=8` });
 let ready = false;
 for (let i = 0; i < 300 && !ready; i++) { await sleep(200); ready = await ev('window.__ready === true'); }
@@ -47,9 +47,12 @@ await ev('window.__shot({frames:40})');
 const night = (await send('Page.captureScreenshot', { format: 'png' })).result;
 const state = await ev('window.__dbg()');
 const proxy = await ev('window.__shadowProxy && window.__shadowProxy()');
+const stats = await ev('window.__shadowStats()');
 writeFileSync(path.join(ROOT, 'tools', 'shots', 'probe-shadow-day.png'), Buffer.from(day.data, 'base64'));
 writeFileSync(path.join(ROOT, 'tools', 'shots', 'probe-shadow-night.png'), Buffer.from(night.data, 'base64'));
 for (const l of logs) console.log(l);
-console.log('state', state, 'proxy', proxy, 'day/night shots', day.data.length, night.data.length);
+console.log('state', state, 'proxy', proxy, 'maps', stats, 'day/night shots', day.data.length, night.data.length);
 cp.kill(); srv.close();
-process.exit(logs.length === 0 && proxy && proxy.ready ? 0 : 1);
+const baked = stats && [1, 2, 3].every((k) => stats[k] && stats[k].variance > 0);
+if (!baked) console.log('SHADOW MAPS LOST: one or more baked maps is a constant clear value');
+process.exit(logs.length === 0 && proxy && proxy.ready && baked ? 0 : 1);
