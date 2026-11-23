@@ -65,15 +65,21 @@ body:not(.l) #ld { opacity: 0; visibility: hidden; }
 #w.open { transform: none; }
 .lb { margin: 1em 0 .4em; font-size: .7em; letter-spacing: .18em; text-transform: uppercase; color: #e2bf6e; }
 .lb:first-child { margin-top: .2em; }
-/* segmented rows (detail, city, light, gps) and toggle rows (collision, stats): the active segment lit */
-#q, #dn, #ci, #gp, .sw { display: flex; align-items: center; gap: .3em; padding: .35em; margin: 0; border-radius: .45em; background: rgba(255, 255, 255, .06); font-size: .82em; letter-spacing: .06em; }
+/* drawer rows: label left, FIXED-width controls right. A toggle always has its own track —
+   earlier flex:1 stretched on/off buttons to random widths and the off state had no background. */
+#q, #dn, #ci, #gp, .sw { display: grid; align-items: center; gap: .3em; padding: .3em .5em; margin: 0; border-radius: .45em; background: rgba(255, 255, 255, .055); font-size: .82em; letter-spacing: .05em; }
+.sw, #gp { grid-template-columns: 1fr 76px; }
+#dn { grid-template-columns: 1fr 64px 64px; }
+#q, #ci { grid-template-columns: 1fr 60px 60px 60px; }
 #ci[hidden] { display: none; }
-#q span, #dn span, #ci span, #gp span, .sw span { padding: 0 .7em 0 .5em; color: #e2bf6e; white-space: nowrap; }
+#q span, #dn span, #ci span, #gp span, .sw span { color: #e2bf6e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #q button, #dn button, #ci button, #gp button, .sw button {
-  flex: 1; min-height: 36px; padding: .3em .2em; border-radius: .3em; color: #f2eadbb3; transition: background .15s, color .15s;
+  width: 100%; min-height: 32px; padding: .2em; border-radius: .3em; text-align: center;
+  background: rgba(255, 255, 255, .09); color: #f2eadbd9; box-shadow: inset 0 0 0 1px rgba(226, 191, 110, .18);
+  transition: background .15s, color .15s;
 }
-#q button:not(.on):hover, #dn button:not(.on):hover, #ci button:not(.on):hover, #gp button:not(.on):hover, .sw button:not(.on):hover { background: #e2bf6e2e; color: #f2eadb; }
-#q .on, #dn .on, #ci .on, #gp .on, .sw .on { background: #e2bf6e; color: #05222b; }
+#q button:not(.on):hover, #dn button:not(.on):hover, #ci button:not(.on):hover, #gp button:not(.on):hover, .sw button:not(.on):hover { background: #e2bf6e35; color: #f2eadb; }
+#q .on, #dn .on, #ci .on, #gp .on, .sw .on { background: #e2bf6e; color: #05222b; box-shadow: none; font-weight: 600; }
 #q .on, #dn .on, #ci .on { pointer-events: none; } /* segments show a selection; toggles stay clickable */
 
 /* key bindings, two columns */

@@ -84,7 +84,7 @@ const simStep = (dist) => {
 };
 
 // sources
-const gpsLabel = () => { const b = $('gb'); if (b) { b.textContent = gpsOn ? gpsSrc : 'off'; b.className = gpsOn ? 'on' : ''; } };
+const gpsLabel = () => { const b = $('gb'); if (b) { b.textContent = gpsOn ? gpsSrc : 'Off'; b.className = gpsOn ? 'on' : ''; } };
 const gpsFail = (m) => { console.warn('gps: ' + m + ' — driving the simulator instead'); if (gpsSrc === 'live') setSrc('sim'); };
 const liveStart = () => {
   if (!navigator.geolocation) return gpsFail('no geolocation API');
