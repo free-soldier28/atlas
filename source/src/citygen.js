@@ -235,12 +235,15 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   // door: dark stone frame, glazed slab behind (plain dark glass, no room)
   const dcx = doorF.L / 2, dw = min(1.2, doorF.L * 0.3), dh = min(2.35, groundN * 0.6);
   bay(b, doorF, dcx - dw / 2, dcx + dw / 2, base, base + dh, 0);
-  // cornice band (front face) around the top, parapet cap ring above it — faces on the long walls only
+  // roofline: the cornice is a FLUSH painted band (darker ao, no protrusion) and the flat roof's
+  // parapet is a 10 cm flush lip on EVERY face. The old protruding cornice (12 cm) over a recessed
+  // parapet face (6 cm, two longest walls only) self-shadowed into a heavy dark band at the
+  // golden-hour sun and broke off at every corner — the deck slice above the cap read as a torn strip
   const c1 = eaves - (roof ? 0.04 : 0.06), c0 = c1 - 0.26;
-  for (const f of F) wquad(b, f, 0, f.L, c0, c1, 0.12, 0.95);
-  if (!roof) {
-    for (const f of F) lid(b, f, -0.06, f.L + 0.06, 0, 0.06, top + 0.34, 1);
-    for (const f of F2) wquad(b, f, 0, f.L, c1, top + 0.34, 0.06, 0.95);
+  for (const f of F) wquad(b, f, 0, f.L, c0, c1, 0, 0.72);
+  if (!roof) for (const f of F) {
+    lid(b, f, 0, f.L, 0, 0.02, top + 0.1, 1);
+    wquad(b, f, 0, f.L, top, top + 0.1, 0.02, 0.92);
   }
   // gable ends rise from the eaves to the ridge on the wall mesh
   const along = (x, z) => x * rx + z * rz, ridge = (a) => [rx * a - rz * pc, top, rz * a + rx * pc];
