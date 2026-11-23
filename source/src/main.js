@@ -890,7 +890,8 @@ $('nt').onclick = () => setNight(1 - night);
 $('lc').onclick = () => locate();
 $('ct').onclick = () => { setDrawer(true); const ci = $('ci'); if (!ci.hidden) ci.scrollIntoView({ block: 'nearest' }); };
 
-// geolocation: one fix with a 4 s budget — the start camera and the locate button share it
+// geolocation: only on explicit user action (locate button / G). No request at startup —
+// the camera opens on the pack's viewpoint and the browser never prompts just for loading a page.
 let geoWhy = 'no fix'; // why the last request produced nothing (for the decision log)
 const geoFix = () => new Promise((res) => {
   if (!navigator.geolocation) { geoWhy = 'no geolocation'; return res(null); }
@@ -899,8 +900,6 @@ const geoFix = () => new Promise((res) => {
     res(null);
   }, { timeout: 4000, enableHighAccuracy: true, maximumAge: 30000 });
 });
-// fire the request now: its 4 s budget overlaps world building instead of blocking __ready
-const fixP = geoFix();
 // far outside the pack's bounding box (> 3 km past an edge): the fix is useless for framing the city
 const outside = (lat, lon) => {
   const b = PK.h.bbox; if (!b) return false;
@@ -963,15 +962,10 @@ const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
 colUI(); winUI(); numUI(); streetUI(); ghostUI();
 
-// start camera: the pack's first viewpoint immediately. The geolocation request started while the
-// world was being built; when it answers, a usable fix moves the camera once (never blocks startup).
+// start camera: the pack's first viewpoint. Only the locate button / G moves it to a GPS fix.
 lookAt(...POSES[0]);
 F[VX] = F[VY] = F[VZ] = 0;
 startStream(); // Phase B: fill the pool around the start camera, then follow it
-if (!AUTO) fixP.then((fix) => { // probes keep the deterministic pack viewpoint
-  if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
-  else if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);
-});
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing
 await skyDay; await skyNight; // both bakes were submitted before buildWorld — normally already done
 await say('Letting the light in…', 1);

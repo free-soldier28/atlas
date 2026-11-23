@@ -1,4 +1,4 @@
-// startup fast paths: (1) geolocation starts early and never gates __ready, (2) both sky/env
+// startup fast paths: (1) no geolocation request until the user asks, (2) both sky/env
 // profiles are submitted before the pack load with one GPU sync each, (3) tile inflation is
 // batched and overlaps meshing. Source-order assertions break if a future edit puts a blocking
 // await back on the critical path; the world test verifies no tile is skipped by the batching.
@@ -25,14 +25,16 @@ test('startup: sky/env submitted before the pack load, single sync per profile',
   assert.ok(m.indexOf('render(); await Q.onSubmittedWorkDone();') < ready, 'first render still precedes __ready');
 });
 
-test('startup: geolocation is fired early and only moves the camera after readiness', () => {
+test('startup: no automatic geolocation request — only the locate button / G asks', () => {
   const m = src('main.js');
-  const geo = m.indexOf('const fixP = geoFix();');
-  assert.ok(geo > 0, 'the fix request must be started once, early');
-  assert.ok(!/const fix = await geoFix\(\)/.test(m), 'the old blocking await must be gone');
+  assert.doesNotMatch(m, /const fixP = geoFix\(\)/, 'no fix request may fire at startup');
+  assert.doesNotMatch(m, /fixP\.then/, 'the start camera must not jump to a late fix');
+  assert.match(m, /const geoFix = \(\)/, 'the fix helper stays for explicit requests');
+  assert.match(m, /\$\('lc'\)\.onclick = \(\) => locate\(\)/, 'the locate button still works');
   const camera = m.indexOf('lookAt(...POSES[0]);', m.indexOf('start camera:'));
-  assert.ok(camera > geo && m.indexOf('fixP.then(', camera) > camera, 'fix applied asynchronously after the pack viewpoint');
-  assert.ok(m.indexOf('await skyDay; await skyNight;') > camera, 'geolocation never gates the first frame');
+  assert.ok(camera > 0 && m.indexOf('await skyDay; await skyNight;') > camera, 'the pack viewpoint opens the scene');
+  const gps = src('gps.js');
+  assert.match(gps, /const gpsStart = \(\) => \{[\s\S]*?else gpsLabel\(\);/, 'GPS defaults to Off, not a live watch');
 });
 
 test('startup: tiles inflated in parallel batches, every tile still reaches the world', async () => {
