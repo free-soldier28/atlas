@@ -13,8 +13,10 @@ const EMBEDDED_PACK = /*PACK*/null;
 let PK = null; // opened pack (mpkOpen result) once loadPack() has run
 
 async function loadPack(url = PACK_URL) {
-  // city menu: the manifest is optional (absent on file:// where fetch cannot read it)
-  try { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } } catch {}
+  // city menu: on file:// there is no manifest (fetch would log a CORS error), so go straight to the pack
+  try {
+    if (location.protocol !== 'file:') { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } }
+  } catch {}
   const m = CITIES && CITIES.cities.find((c) => c.id === CITY), u = m ? m.url : url;
   // an embedded pack serves file:// and offline opens (no manifest to choose from); a city picked
   // in the drawer or ?city= overrides it, so the switcher actually switches
