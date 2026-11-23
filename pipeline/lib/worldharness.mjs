@@ -33,7 +33,7 @@ export const engine = async () => {
       src('labels.js'),
       src('world.js'),
     ].join('\n');
-    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld, dedupe, place };');
+    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld, dedupe, place, setMBDry };');
     return globalThis.__atlasEngine;
   })();
   return bootPromise;

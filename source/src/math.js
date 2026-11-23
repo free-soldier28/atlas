@@ -133,14 +133,22 @@ const earclip = (ring, holes = []) => {
 // mesh builder
 // vertex, 20 bytes: position (3 floats), normal + baked occlusion (4 snorm8), material id + 3 params (4 unorm8).
 // build() winds triangles to match their vertex normals.
+// Counting mode for lazy world building: a dry MB records how much geometry a tile *would*
+// produce (nv/ni) without generating any of it, so the GPU's static buffers can be sized and all
+// type/instance slots reserved before the meshes themselves are built. Set around buildWorld's
+// plan pass only; every real build leaves it off.
+let MBdry = false;
+const setMBDry = (on) => { MBdry = !!on; };
 class MB {
   constructor(cap = 4096) {
+    if (MBdry) { this.dry = 1; this.nv = 0; this.ni = 0; this.mat = 0; this.ao = 1; this.ea = 0; this.eb = 0; this.ec = 0; this.fr = null; return; }
     this.vb = new ArrayBuffer(cap * 20); this.f = new Float32Array(this.vb); this.b = new Uint8Array(this.vb); this.sb = new Int8Array(this.vb);
     this.ib = new Uint32Array(cap * 3); this.nv = 0; this.ni = 0;
     this.mat = 0; this.ao = 1; this.ea = 0; this.eb = 0; this.ec = 0; // material, occlusion, parameters
     this.fr = null; // optional frame [ox, oy, oz, yaw-cos, yaw-sin, scale] applied to everything added
   }
   v(x, y, z, nx, ny, nz, ao = this.ao) {
+    if (this.dry) return this.nv++;
     if (this.nv * 20 >= this.vb.byteLength) { const n = new ArrayBuffer(this.vb.byteLength * 2); new Uint8Array(n).set(this.b); this.vb = n; this.f = new Float32Array(n); this.b = new Uint8Array(n); this.sb = new Int8Array(n); }
     const fr = this.fr;
     if (fr) { const c = fr[3], s = fr[4], k = fr[5], X = x * k, Z = z * k; x = fr[0] + X * c + Z * s; y = fr[1] + y * k; z = fr[2] - X * s + Z * c; const NX = nx; nx = NX * c + nz * s; nz = -NX * s + nz * c; }
@@ -151,6 +159,7 @@ class MB {
     return i;
   }
   tri(a, b, c) {
+    if (this.dry) { this.ni += 3; return; }
     if (this.ni + 3 > this.ib.length) { const n = new Uint32Array(this.ib.length * 2); n.set(this.ib); this.ib = n; }
     this.ib[this.ni++] = a; this.ib[this.ni++] = b; this.ib[this.ni++] = c;
   }
@@ -231,6 +240,7 @@ class MB {
   }
   // append mesh m placed by [x, y, z, yaw, scale]
   add(m, x = 0, y = 0, z = 0, yaw = 0, k = 1) {
+    if (this.dry) { this.nv += m.nv; this.ni += m.ni; return; }
     const c = cos(yaw), s = sin(yaw), i0 = this.nv, f = new Float32Array(m.vb), sb = new Int8Array(m.vb), b = new Uint8Array(m.vb), sm = this.mat, sa = this.ea, sB = this.eb, sc = this.ec, fr = this.fr; this.fr = null;
     for (let i = 0; i < m.nv; i++) {
       const o = i * 5, q = i * 20, X = f[o] * k, Z = f[o + 2] * k, nx = sb[q + 12], nz = sb[q + 14];
@@ -240,8 +250,9 @@ class MB {
     for (let i = 0; i < m.ib.length; i += 3) this.tri(i0 + m.ib[i], i0 + m.ib[i + 1], i0 + m.ib[i + 2]);
     this.mat = sm; this.ea = sa; this.eb = sB; this.ec = sc; this.fr = fr;
   }
-  // finished mesh { vb, ib, nv, rad }: triangles facing against their normals are flipped; rad = bounding radius
+  // finished mesh { vb, ib, nv, ni, rad }: triangles facing against their normals are flipped; rad = bounding radius
   build() {
+    if (this.dry) return { vb: null, ib: null, nv: this.nv, ni: this.ni, rad: 0, pending: 1 };
     const f = this.f, sb = this.sb, ib = this.ib.slice(0, this.ni); let rad = 0;
     for (let i = 0; i < this.ni; i += 3) {
       const a = ib[i] * 5, b = ib[i + 1] * 5, c = ib[i + 2] * 5;
@@ -250,6 +261,6 @@ class MB {
       if (nx * (sb[A] + sb[B] + sb[C]) + ny * (sb[A + 1] + sb[B + 1] + sb[C + 1]) + nz * (sb[A + 2] + sb[B + 2] + sb[C + 2]) < 0) { const t = ib[i + 1]; ib[i + 1] = ib[i + 2]; ib[i + 2] = t; }
     }
     for (let i = 0; i < this.nv * 5; i += 5) rad = max(rad, f[i] * f[i] + f[i + 1] * f[i + 1] + f[i + 2] * f[i + 2]);
-    return { vb: this.vb.slice(0, this.nv * 20), ib, nv: this.nv, rad: sqrt(rad) };
+    return { vb: this.vb.slice(0, this.nv * 20), ib, nv: this.nv, ni: this.ni, rad: sqrt(rad) };
   }
 }

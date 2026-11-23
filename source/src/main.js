@@ -189,15 +189,23 @@ await say('Loading map pack…', 0.18);
 await loadPack();
 if (PK.h.poses) POSES = PK.h.poses; // viewpoints for keys 1-6 come from the pack when it has them
 if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through replaces the default lap
-const Wd = await buildWorld(PK);
+// Lazy tiles: interactive sessions mesh only the 3x3 tiles around the start camera before the first
+// frame; the rest are filled in the background. AUTO probes stay deterministic (full build) unless
+// they pass ?lazy explicitly, and ?full forces the old eager path in the browser.
+const LAZY = QP.has('lazy') || (!AUTO && !QP.has('full'));
+const focus = POSES.length ? [POSES[0][0], POSES[0][2]] : [0, 0];
+const nTiles = QP.has('tiles') ? max(1, min(PK.h.tiles.length, +QP.get('tiles') || 9)) : 9;
+const Wd = await buildWorld(PK, LAZY ? { lazy: true, focus, count: nTiles, limit: QP.has('tiles') ? nTiles : 0 } : {});
 landY = Wd.ground; setHard(Wd.hard); setBoxes(Wd.bboxes); // collision ground, old shape lists (empty), building boxes
 const MK = mkMarker(Wd); // vehicle marker: mesh + type + one ALWAYS instance through the world's own type()/put()
 await say('Planting gardens…', 0.7);
 let nV = 0, nIx = 0;
-for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; m.ni = m.ib.length; nV += m.nv; nIx += m.ni; }
-// upload each mesh separately and drop it, so geometry never sits in memory twice (phones)
+for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; }
+// upload each mesh separately and drop it, so geometry never sits in memory twice (phones).
+// Lazy tiles still in the queue have reserved nv/ni but no vb/ib — their indirect draws stay at
+// zero index count until fillNext() writes the geometry and refreshes those slots.
 const vbMesh = device.createBuffer({ size: max(16, nV * 20), usage: BU.VERTEX | BU.COPY_DST }), ibMesh = device.createBuffer({ size: max(16, nIx * 4), usage: BU.INDEX | BU.COPY_DST });
-for (const m of Wd.meshes) { if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb); if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib); m.vb = m.ib = null; }
+for (const m of Wd.meshes) { if (m.pending) continue; if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb); if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib); m.vb = m.ib = null; }
 const bInst = buf(new Uint8Array(Wd.nI * 48 + 48), BU.STORAGE); Q.writeBuffer(bInst, 0, Wd.inst); // extra slot: the vehicle marker
 markerBuf(bInst, MK * 48); gpsStart(); // marker's instance slot; then GPS per the query params
 await ck('geometry');
@@ -208,14 +216,44 @@ if (AUTO) console.log(`${Wd.meshes.length} meshes · ${(nV / 1e6).toFixed(2)} M 
 const slots = [], NONE = 0xffffffff;
 const tyData = new ArrayBuffer(Wd.types.length * 48), tyU = new Uint32Array(tyData), tyF = new Float32Array(tyData); // struct MType in sh_scene.js
 let nVis = 0;
+const slotsByMesh = new Map(); // reverse index for the lazy filler: filled mesh → indirect slots
 Wd.types.forEach((t, i) => {
-  for (let l = 0; l < 4; l++) { if (l < t.lods.length) { tyU[i * 12 + l] = slots.length; slots.push({ mesh: Wd.meshes[t.lods[l]], kind: t.kind, flags: t.flags, first: nVis, n: t.n, lod: l }); nVis += t.n; } else tyU[i * 12 + l] = NONE; }
+  for (let l = 0; l < 4; l++) { if (l < t.lods.length) { tyU[i * 12 + l] = slots.length; const s = { mesh: Wd.meshes[t.lods[l]], kind: t.kind, flags: t.flags, first: nVis, n: t.n, lod: l }; slots.push(s); let a = slotsByMesh.get(s.mesh); if (!a) slotsByMesh.set(s.mesh, a = []); a.push(slots.length - 1); nVis += t.n; } else tyU[i * 12 + l] = NONE; }
   tyF.set(t.d, i * 12 + 4); tyF[i * 12 + 8] = t.d23;
 });
 const argData = new Uint32Array(slots.length * 5);
-slots.forEach((s, i) => argData.set([s.mesh.ni, 0, s.mesh.i0, s.mesh.v0, s.first], i * 5));
+slots.forEach((s, i) => argData.set([s.mesh.pending ? 0 : s.mesh.ni, 0, s.mesh.i0, s.mesh.v0, s.first], i * 5));
 const bTypes = buf(new Uint8Array(tyData), BU.STORAGE);
 const bArgs = [0, 1].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COPY_SRC)), bVis = [0, 1].map(() => device.createBuffer({ size: max(16, nVis * 4), usage: BU.STORAGE }));
+// Lazy filler: upload each finished tile into the slot block reserved by the plan pass, refresh
+// its instance rows (the radii are real now) and switch its indirect draws on. Everything above is
+// static, so the cull/shadow/render pipelines and bind groups never need rebuilding.
+let rebakeShadows = null, rebaked = false;
+const startFill = () => {
+  if (!Wd.lazy) return;
+  const arg = new Uint32Array(5), total = Wd.focusOrder.length;
+  const upload = (i) => {
+    for (const m of Wd.tilesFor(i)) {
+      if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb);
+      if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib);
+      m.vb = m.ib = null; m.pending = 0;
+      arg[0] = m.ni; arg[1] = 0; arg[2] = m.i0; arg[3] = m.v0;
+      for (const si of slotsByMesh.get(m) || []) { arg[4] = slots[si].first; Q.writeBuffer(bArgs[0], si * 20, arg); Q.writeBuffer(bArgs[1], si * 20, arg); }
+    }
+    const r = Wd.ranges[i];
+    if (r) Q.writeBuffer(bInst, r.i0 * 48, Wd.inst.slice(r.i0 * 48, r.i1 * 48));
+  };
+  const pump = () => {
+    const got = Wd.fillNext(8, 4);
+    for (const i of got) upload(i);
+    if (Wd.filledCount() === total && rebakeShadows && !rebaked) { rebaked = true; rebakeShadows(); }
+    if (Wd.filledCount() < total) schedule();
+  };
+  const schedule = () => { if (typeof requestIdleCallback === 'function') requestIdleCallback(pump, { timeout: 120 }); else setTimeout(pump, 0); };
+  window.__lazyFill = () => { let n = 0; for (;;) { const got = Wd.fillNext(64, 1e9); if (!got.length) break; for (const i of got) upload(i); n += got.length; } return n; };
+  window.__lazyProgress = () => `${Wd.filledCount()}/${total}`;
+  schedule();
+};
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
 const bgCull = [0, 1].map((v) => group(lCull, [ubo[v], bInst, bTypes, bArgs[v], bVis[v]]));
@@ -301,6 +339,10 @@ const bakeShadowMaps = async (dst) => {
 const tShT0 = performance.now();
 await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
+// lazy tiles arrive after those maps were baked; once the queue drains, bake the active profile
+// again so distant casters are present. The same helper fills the inactive profile at night switches.
+rebakeShadows = () => { bakeShadowMaps(night ? tShN : tSh).then(() => { shReady[night ? 1 : 0] = true; }); };
+startFill(); // overlap the remaining tile meshing with pipeline setup and the first frames
 // the bake writes the map matrices into the shadow view only, and the light pass reads them from
 // the main view: without this copy the far maps sampled with zero matrices — shadows existed only
 // inside the camera cascade and flickered in and out as the cascade swept over the district
