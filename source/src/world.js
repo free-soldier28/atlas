@@ -153,6 +153,12 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     // wedge gaps at every bend and let the parapet caps shoot across the deck as white fins.
     const edge = (i, w, s) => {
       const cx = dx + pts[i * 2] / 100, cz = dz + pts[i * 2 + 1] / 100, k = w / hw, o = i * 4 + (s > 0 ? 2 : 0);
+      if (i === 0 || i === n - 1) {
+        // ribbonBase overshoots the ends by half a width to close road joints; a pier's structure
+        // must stop at its real endpoint or the parapet hangs past the deck as a broken stub
+        const j = i === 0 ? 0 : n - 2;
+        return [cx + dirZ[j] * w * s, cz - dirX[j] * w * s];
+      }
       return [cx + (off[o] - cx) * k, cz + (off[o + 1] - cz) * k];
     };
     for (let i = 0; i + 1 < n; i++) {
