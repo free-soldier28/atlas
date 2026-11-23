@@ -192,15 +192,24 @@ if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through repla
 // Lazy tiles: interactive sessions mesh only the 3x3 tiles around the start camera before the first
 // frame; the rest are filled in the background. AUTO probes stay deterministic (full build) unless
 // they pass ?lazy explicitly, and ?full forces the old eager path in the browser.
-const LAZY = QP.has('lazy') || (!AUTO && !QP.has('full'));
+// Phase B: ?pool=N turns on the streaming tile pool (fixed GPU footprint, camera-follow loads).
+const POOL = QP.has('pool') ? clamp(+QP.get('pool') || 16, 4, 64) : 0;
+const LAZY = !POOL && (QP.has('lazy') || (!AUTO && !QP.has('full')));
 const focus = POSES.length ? [POSES[0][0], POSES[0][2]] : [0, 0];
 const nTiles = QP.has('tiles') ? max(1, min(PK.h.tiles.length, +QP.get('tiles') || 9)) : 9;
-const Wd = await buildWorld(PK, LAZY ? { lazy: true, focus, count: nTiles, limit: QP.has('tiles') ? nTiles : 0 } : {});
+const Wd = await buildWorld(PK, POOL ? { pool: POOL, focus } : LAZY ? { lazy: true, focus, count: nTiles, limit: QP.has('tiles') ? nTiles : 0 } : {});
 landY = Wd.ground; setHard(Wd.hard); setBoxes(Wd.bboxes); // collision ground, old shape lists (empty), building boxes
 const MK = mkMarker(Wd); // vehicle marker: mesh + type + one ALWAYS instance through the world's own type()/put()
 await say('Planting gardens…', 0.7);
 let nV = 0, nIx = 0;
-for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; }
+if (Wd.pool) {
+  // pool slots have a fixed footprint: allocate once for the worst tile, then rewrite in place
+  const P = Wd.pool; nV = P.size * P.capV; nIx = P.size * P.capX;
+  for (const m of P.meshes) {
+    if (m.slot !== undefined) { m.v0 = m.slot * P.capV; m.i0 = m.slot * P.capX; }
+    else { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; } // dummy + vehicle marker live past the slots
+  }
+} else for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; }
 // upload each mesh separately and drop it, so geometry never sits in memory twice (phones).
 // Lazy tiles still in the queue have reserved nv/ni but no vb/ib — their indirect draws stay at
 // zero index count until fillNext() writes the geometry and refreshes those slots.
@@ -253,6 +262,53 @@ const startFill = () => {
   window.__lazyFill = () => { let n = 0; for (;;) { const got = Wd.fillNext(64, 1e9); if (!got.length) break; for (const i of got) upload(i); n += got.length; } return n; };
   window.__lazyProgress = () => `${Wd.filledCount()}/${total}`;
   schedule();
+};
+// Phase B streaming controller: keep the nearest tiles in the fixed pool. A swap rewrites only
+// that slot's geometry, type record, 4 indirect draws and instance rows — no buffers or bind groups
+// are recreated, so a camera move costs one tile's meshing instead of a world rebuild.
+const startStream = () => {
+  if (!Wd.pool) return;
+  const P = Wd.pool, arg = new Uint32Array(5), tBuf = new ArrayBuffer(48), tU = new Uint32Array(tBuf), tF = new Float32Array(tBuf);
+  const publish = (r) => {
+    for (const m of r.meshes) {
+      if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb);
+      if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib);
+      m.vb = m.ib = null;
+    }
+    r.types.forEach((t, k) => {
+      const idx = r.t0 + k;
+      for (let l = 0; l < 4; l++) {
+        tU[l] = t.lods[l]; tF[4 + l] = t.d[l];
+        tyU[idx * 12 + l] = tU[l]; tyF[idx * 12 + 4 + l] = tF[4 + l];
+        const si = tU[l]; // the slot index the cull shader will emit into for this LOD
+        const mesh = Wd.meshes[t.lods[l]]; slots[si].mesh = mesh;
+        arg[0] = mesh.ni; arg[1] = 0; arg[2] = mesh.i0; arg[3] = mesh.v0; arg[4] = slots[si].first;
+        Q.writeBuffer(bArgs[0], si * 20, arg); Q.writeBuffer(bArgs[1], si * 20, arg);
+      }
+      tF[8] = t.d23; tyF[idx * 12 + 8] = tF[8];
+      Q.writeBuffer(bTypes, idx * 48, tBuf);
+    });
+    Q.writeBuffer(bInst, r.i0 * 48, P.inst.slice(r.i0 * 48, r.i1 * 48));
+  };
+  const inds = PK.h.tiles.map((_, i) => i);
+  let lastBake = 0;
+  const sync = () => {
+    const want = P.nearest(inds, F[CX], F[CZ]).slice(0, P.size);
+    let changed = 0;
+    for (let s = 0; s < P.size; s++) { const t = P.slotState[s]; if (t >= 0 && !want.includes(t)) { publish(P.unload(s)); changed++; } }
+    for (const t of want) if (!P.slotState.includes(t)) {
+      const s = P.slotState.indexOf(-1); if (s < 0) break;
+      publish(P.load(s, t)); changed++;
+    }
+    if (changed && rebakeShadows && performance.now() - lastBake > 1500) { lastBake = performance.now(); rebakeShadows(); }
+    return changed;
+  };
+  window.__stream = sync;
+  window.__cam = () => [F[CX], F[CY], F[CZ]];
+  window.__poolState = () => `${P.loaded()}/${P.size} tiles · ${((nV * 20 + nIx * 4 + Wd.nI * 48) / 1048576).toFixed(0)} MB reserved · ${P.slotState.join(',')}`;
+  sync();
+  if (rebakeShadows) rebakeShadows();
+  setInterval(sync, 750); // camera-follow; sync() is a no-op until the nearest set actually changes
 };
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
@@ -843,6 +899,7 @@ colUI(); winUI(); numUI(); streetUI(); ghostUI();
 // world was being built; when it answers, a usable fix moves the camera once (never blocks startup).
 lookAt(...POSES[0]);
 F[VX] = F[VY] = F[VZ] = 0;
+startStream(); // Phase B: fill the pool around the start camera, then follow it
 if (!AUTO) fixP.then((fix) => { // probes keep the deterministic pack viewpoint
   if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
   else if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);
