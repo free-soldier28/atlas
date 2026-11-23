@@ -39,7 +39,9 @@ async function mpkTile(P, i) {
         } else if (kind === 2) {
           const cls = u8v(), flags = u8v(), name = u16(), lanes = u8v(), w10 = i16(), nPts = u16();
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();
-          recs.push({ cls, flags, name, lanes, w10, pts });
+          let ys = null; // flags bit1 bridge: absolute deck heights in cm follow (docs/mpk-format.md)
+          if (flags & 2) { ys = new Array(nPts); for (let j = 0; j < nPts; j++) ys[j] = i16(); }
+          recs.push({ cls, flags, name, lanes, w10, pts, ys });
         } else if (kind === 3 || kind === 4) {
           const wkind = u8v(), nPts = u16();
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();

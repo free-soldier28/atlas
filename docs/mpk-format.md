@@ -80,7 +80,11 @@ per LOD:
       roads:     u8 cls, u8 flags, u16 name, u8 lanes, i16 w10, u16 nPts, i32 pts[nPts*2]
                  // cls: 0 motorway,1 trunk,2 primary,3 secondary,4 tertiary,5 residential,
                  //      6 unclassified/living,7 service,8 pedestrian,9 footway,10 path;
-                 // flags bit0 oneway; w10: full width in 0.1 m (0 = use cls default)
+                 // flags bit0 oneway, bit1 bridge; w10: full width in 0.1 m (0 = use cls default)
+                 // bridge (bit1): i16 ys[nPts] follows pts — absolute deck heights in cm per
+                 //   vertex (base 6 cm at the ends, ramps between); the renderer builds the deck,
+                 //   side walls, parapets and piers from them. Ways crossing a water poly of
+                 //   2000 m² or more are flagged by the pipeline even without an OSM bridge tag.
       water/green: u8 kind, u16 nPts, i32 pts[nPts*2]
                  // water POLYGON kinds: 0 riverbank, 1 lake, 2 canal, 3 pond — closed rings
                  //   (first point == last point, tolerance 1 cm; the pipeline appends the first

@@ -34,7 +34,7 @@ export class MPKBuilder {
         for (const r of L.recs) {
           if (L.kind === 1) { w.u16(r.pts.length / 2); w.u8(r.bkind | 0); w.u8(r.roof | 0); w.i16(r.h10 | 0); w.i16(r.base10 | 0); w.u32(r.osmId | 0); w.u8(r.src | 0); for (const v of r.pts) w.i32(v); }
           else if (L.kind === 6) { w.u32(r.osmId | 0); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); } // building hole (docs v2.1)
-          else if (L.kind === 2) { w.u8(r.cls); w.u8(r.flags | 0); w.u16(this.str(r.name)); w.u8(r.lanes | 0); w.i16(r.w10 | 0); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); }
+          else if (L.kind === 2) { w.u8(r.cls); w.u8(r.flags | 0); w.u16(this.str(r.name)); w.u8(r.lanes | 0); w.i16(r.w10 | 0); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); if (r.flags & 2) { if (!r.ys || r.ys.length !== r.pts.length / 2) throw new Error(`bridge road record ys mismatch: ${r.ys ? r.ys.length : 'none'} ys vs ${r.pts.length / 2} pts`); for (const y of r.ys) w.i16(Math.round(y)); } }
           else if (L.kind === 3 || L.kind === 4) { w.u8(r.kind); w.u16(r.pts.length / 2); for (const v of r.pts) w.i32(v); }
           else if (L.kind === 5) { w.u8(r.cell); w.u8(Math.sqrt(r.h.length)); for (const v of r.h) w.i16(v); }
           else throw new Error(`unknown layer kind ${L.kind}`);

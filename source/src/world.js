@@ -76,9 +76,11 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   // both segments share the joint pair, the ribbon cannot open. Ends run half a width past their
   // last point: separate ways meet at a node with their ends apart, and the wedges between their
   // butt lines only close if both ribbons reach across the joint.
-  // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame
-  const ribbon = (mb, pts, hw, dx, dz, y = 0.06) => {
-    const n = pts.length / 2; if (n < 2) return;
+  // pts are tile-local cm; dx / dz shift the ribbon into the tile's centre-local frame.
+  // y is the strip's height (metres): a constant, or a per-vertex array — bridge decks ride in
+  // the record's ys (cm) with ramps at both ends, so `bridgeDeck` below can share the miter work
+  const ribbonBase = (pts, dx, dz, hw) => {
+    const n = pts.length / 2;
     const dirX = [], dirZ = []; // unit segment directions (degenerate segments inherit the previous)
     for (let i = 0; i + 1 < n; i++) {
       const ex = pts[i * 2 + 2] - pts[i * 2], ez = pts[i * 2 + 3] - pts[i * 2 + 1], L = hypot(ex, ez);
@@ -101,9 +103,74 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       off[i * 4] = bxx - mx * ml; off[i * 4 + 1] = bzz - mz * ml;
       off[i * 4 + 2] = bxx + mx * ml; off[i * 4 + 3] = bzz + mz * ml;
     }
-    for (let i = 0; i + 1 < n; i++)
-      mb.quad(mb.v(off[i * 4], y, off[i * 4 + 1], 0, 1, 0), mb.v(off[i * 4 + 2], y, off[i * 4 + 3], 0, 1, 0),
-        mb.v(off[i * 4 + 6], y, off[i * 4 + 7], 0, 1, 0), mb.v(off[i * 4 + 4], y, off[i * 4 + 5], 0, 1, 0));
+    return { n, dirX, dirZ, off };
+  };
+  const ribbon = (mb, pts, hw, dx, dz, y = 0.06) => {
+    const { n, off } = ribbonBase(pts, dx, dz, hw);
+    if (n < 2) return;
+    for (let i = 0; i + 1 < n; i++) {
+      const y0 = y.length ? y[i] : y, y1 = y.length ? y[i + 1] : y;
+      mb.quad(mb.v(off[i * 4], y0, off[i * 4 + 1], 0, 1, 0), mb.v(off[i * 4 + 2], y0, off[i * 4 + 3], 0, 1, 0),
+        mb.v(off[i * 4 + 6], y1, off[i * 4 + 7], 0, 1, 0), mb.v(off[i * 4 + 4], y1, off[i * 4 + 5], 0, 1, 0));
+    }
+  };
+  // bridge structure for a deck record (flags bit1): side walls under the deck edge, parapets on
+  // top, piers down to the ground where the deck is high enough. The deck surface itself is the
+  // road's own ribbon at the ys heights; everything here is the QUAY-mesh concrete that makes a
+  // floating ribbon read as a bridge
+  const bridgeDeck = (mb, pts, hw, dx, dz, ycm) => {
+    const y = ycm.map((v) => v / 100);
+    const { n, dirX, dirZ } = ribbonBase(pts, dx, dz, hw);
+    if (n < 2) return;
+    // vertical wall between the points (ax,az)@ay and (bx,bz)@by, hanging `drop` metres below
+    // the top (clamped at the ground); both faces when the wall is seen from either side
+    const wall = (ax, az, ay, bx, bz, by, nx, nz, drop = 1.3, both = true) => {
+      const a0 = max(0, ay - drop), b0 = max(0, by - drop);
+      if (ay <= 0.03 && a0 <= 0.03) return; // ramp already at ground level
+      mb.quad(mb.v(ax, a0, az, nx, 0, nz), mb.v(bx, b0, bz, nx, 0, nz), mb.v(bx, by, bz, nx, 0, nz), mb.v(ax, ay, az, nx, 0, nz));
+      if (both) mb.quad(mb.v(ax, ay, az, -nx, 0, -nz), mb.v(bx, by, bz, -nx, 0, -nz), mb.v(bx, b0, bz, -nx, 0, -nz), mb.v(ax, a0, az, -nx, 0, -nz));
+    };
+    for (let i = 0; i + 1 < n; i++) {
+      const px = dx + pts[i * 2] / 100, pz = dz + pts[i * 2 + 1] / 100, yi = y[i];
+      const qx = dx + pts[i * 2 + 2] / 100, qz = dz + pts[i * 2 + 3] / 100, yj = y[i + 1];
+      const nx = dirZ[i], nz = -dirX[i]; // outward normal of this segment
+      const lw = hw - 0.12, pw = hw + 0.1, ph = 1.1; // slab plane, parapet plane, parapet rise
+      // deck slab sides: both faces (the deck is seen from above the water and from under it)
+      wall(px + nx * lw, pz + nz * lw, yi + 0.04, qx + nx * lw, qz + nz * lw, yj + 0.04, nx, nz);
+      wall(px - nx * lw, pz - nz * lw, yi + 0.04, qx - nx * lw, qz - nz * lw, yj + 0.04, -nx, -nz);
+      // parapets: a 1.1 m wall just outside each deck edge + a 0.3 m top cap
+      for (const s of [-1, 1]) {
+        const nxs = nx * s, nzs = nz * s;
+        const ax = px + nxs * pw, az = pz + nzs * pw, bx = qx + nxs * pw, bz = qz + nzs * pw;
+        const cx = px + nxs * (pw + 0.3), cz = pz + nzs * (pw + 0.3), dxx = qx + nxs * (pw + 0.3), dzz = qz + nzs * (pw + 0.3);
+        wall(ax, az, yi + 0.05, bx, bz, yj + 0.05, nxs, nzs, ph);
+        mb.quad(mb.v(ax, yi + ph + 0.05, az, 0, 1, 0), mb.v(bx, yj + ph + 0.05, bz, 0, 1, 0), mb.v(dxx, yj + ph + 0.05, dzz, 0, 1, 0), mb.v(cx, yi + ph + 0.05, cz, 0, 1, 0));
+      }
+    }
+    // piers: every 24 m of the run's arc, only where the deck is high enough (never on the
+    // ramps / banks) — the box hangs from the slab underside down to the ground
+    let acc = 0, next = 24;
+    for (let i = 0; i + 1 < n; i++) {
+      const sl = hypot(pts[i * 2 + 2] - pts[i * 2], pts[i * 2 + 3] - pts[i * 2 + 1]) / 100;
+      while (acc + sl >= next) {
+        const t = (next - acc) / sl;
+        const cx = dx + pts[i * 2] / 100 + (dx + pts[i * 2 + 2] / 100 - dx - pts[i * 2] / 100) * t;
+        const cz = dz + pts[i * 2 + 1] / 100 + (dz + pts[i * 2 + 3] / 100 - dz - pts[i * 2 + 1] / 100) * t;
+        const yk = y[i] + (y[i + 1] - y[i]) * t;
+        next += 24;
+        if (yk < 2.4) continue;
+        const ux = dirX[i], uz = dirZ[i], wx = -uz, wz = ux, a = 0.8, b = min(hw - 0.35, 2.6), top = yk - 1.1;
+        if (top < 0.4) continue;
+        // four walls of the pier box, rotated to the bridge direction
+        const p1x = cx + ux * a + wx * b, p1z = cz + uz * a + wz * b, p2x = cx + ux * a - wx * b, p2z = cz + uz * a - wz * b;
+        const p3x = cx - ux * a - wx * b, p3z = cz - uz * a - wz * b, p4x = cx - ux * a + wx * b, p4z = cz - uz * a + wz * b;
+        wall(p1x, p1z, top, p2x, p2z, top, ux, uz, 1e9, false);
+        wall(p3x, p3z, top, p4x, p4z, top, -ux, -uz, 1e9, false);
+        wall(p4x, p4z, top, p1x, p1z, top, wx, wz, 1e9, false);
+        wall(p2x, p2z, top, p3x, p3z, top, -wx, -wz, 1e9, false);
+      }
+      acc += sl;
+    }
   };
   // a flat polygon triangulated by ear clipping (concave-safe, no fan spill) at height y;
   // pts already in tile-local metres. earclip's indices are pool-local: rebase onto the mesh (b0)
@@ -127,8 +194,9 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       for (const r of L.recs) { const a = holes.get(r.osmId); if (a) a.push(r); else holes.set(r.osmId, [r]); }
     }
     const city = cityTile(i, lods, ox, oz, S, bboxes, holes); // buildings into tint buckets + road centre lines
-    const mR = new MB(1 << 15), mF = new MB(1 << 12), mW = new MB(1 << 12), mG = new MB(1 << 12);
-    let nR = 0, nW = 0, nG = 0;
+    const mR = new MB(1 << 15), mF = new MB(1 << 12), mW = new MB(1 << 12), mG = new MB(1 << 12), mB = new MB(1 << 13);
+    mB.mat = M.QUAY; // bridge concrete: deck slab sides, parapets, piers (baked per vertex)
+    let nR = 0, nW = 0, nG = 0, nB = 0;
     for (const L of lods) {
     if (L.kind === 2) {
       // two surfaces: drivable roads (cls ≤ 7) in dark asphalt, footways/paths/steps (8-10) in
@@ -138,8 +206,15 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
         const hw = (r.w10 || (CLSW[r.cls] || 8) * 10) / 20;
         const mb = r.cls <= 7 ? mR : mF;
         mb.mat = r.cls <= 7 ? M.ASPHALT : M.PAVE;
-        ribbon(mb, r.pts, hw, -th, -th);
-        for (let k = 0; k + 3 < r.pts.length; k += 2) paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
+        const bridge = !!(r.flags & 2) && r.ys;
+        ribbon(mb, r.pts, hw, -th, -th, bridge ? r.ys.map((v) => v / 100) : 0.06);
+        if (bridge) { bridgeDeck(mB, r.pts, hw, -th, -th, r.ys); nB++; }
+        for (let k = 0; k + 3 < r.pts.length; k += 2) {
+          // the ground MAP reads as asphalt where the road lies on it; elevated deck segments
+          // must not tint the riverbed under the bridge
+          if (bridge && (r.ys[k / 2] > 100 || r.ys[k / 2 + 1] > 100)) continue;
+          paintSeg(ox + r.pts[k] / 100, oz + r.pts[k + 1] / 100, ox + r.pts[k + 2] / 100, oz + r.pts[k + 3] / 100, hw);
+        }
         nR++;
       }
     } else if (L.kind === 3) {
@@ -177,6 +252,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     // only register meshes that got geometry (degenerate records — e.g. a pack's zeroed road pts — make none)
     if (nR && mR.ni) put(type([mR.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nR && mF.ni) put(type([mF.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz); // bridge concrete
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
   }

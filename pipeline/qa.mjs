@@ -7,6 +7,8 @@
 //   heights      building heights inside the pipeline's clamp, bases non-negative and sane
 //   bbox         every record point inside the pack bbox + 2 km (the clip rect)
 //   waterOverlap water polygons containing buildings (a riverbank-style area over houses)
+//   bridges      roads over big water must carry flags bit1 with per-vertex deck heights
+//                (deck ≥ 1.2 m; non-bridge roads may not cross water polys ≥ 2000 m²)
 //   roadJoints   road ribbon records meeting at an angle: the wedge around the joint must be
 //                covered by road triangles (the miter strip + end overshoot guarantee; the test
 //                catches a future ribbon regression without a screenshot)
@@ -16,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
+import { crossesWater } from './lib/bridge.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const M2 = 2000; // the clip margin build-city applies (bbox + 2 km)
@@ -57,7 +60,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     }
     W.waters.push(...recs.w.map((w) => ({ pts: w.pts, ox, oz, tile: i })));
     W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId })));
-    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20 })));
+    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, flags: r.flags, ys: r.ys })));
   }
   stats.tiles = P.h.tiles.length;
 
@@ -84,6 +87,24 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     }
     if (nB) errors.push({ check: 'waterOverlap', msg: `water poly ${(area(w.pts) | 0)} m² (tile ${w.tile}) contains ${nB} building(s), e.g. osm ${hit.osmId}` });
   }
+
+  // bridges: any road over big water must carry flags bit1 with sane deck heights (the "road lies
+  // in the water" defect class). build-city tags crossings itself — here the pack just gets failed
+  const bigWater = W.waters.filter((w) => area(w.pts) >= 2e6) // pts are cm → area cm²; ≥ 2000 m²
+    .map((w) => ({ pts: w.pts.map((v, k) => (k % 2 ? w.oz : w.ox) + v / 100), area: area(w.pts) / 1e4 }));
+  let nBridges = 0;
+  for (const r of W.roads) {
+    if (r.flags & 2) {
+      nBridges++;
+      if (!r.ys || r.ys.length !== r.pts.length / 2) errors.push({ check: 'bridges', msg: `bridge record without per-vertex deck heights (tile ${r.tile})` });
+      else if (Math.max(...r.ys) < 120) errors.push({ check: 'bridges', msg: `bridge deck peaks at ${(Math.max(...r.ys) / 100).toFixed(1)} m — too low for a water crossing (tile ${r.tile})` });
+      else if (Math.min(...r.ys) < 0) errors.push({ check: 'bridges', msg: `negative deck height in ys (tile ${r.tile})` });
+      continue;
+    }
+    const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
+    if (bigWater.length && crossesWater(g, bigWater)) errors.push({ check: 'bridges', msg: `road crosses big water without a bridge flag (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)})` });
+  }
+  stats.bridges = nBridges;
 
   // ---------- render check: road joints covered (buildWorld once) ----------
   const W2 = await E.buildWorld(P);

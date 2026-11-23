@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
+import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
 const readCache = (n) => JSON.parse(readFileSync(path.join(here, 'cache', `${n}.json`), 'utf8')).elements;
@@ -129,11 +130,13 @@ function segClip(ax, az, bx, bz) {
   return t0 <= t1 ? [t0, t1] : null;
 }
 
-// polyline → runs of ≥2 points inside the rect (crossings interpolated to the rect edge)
-function clipLine(pts) {
-  const runs = [];
-  let cur = null;
-  const endRun = () => { if (cur && cur.length >= 4) runs.push(cur); cur = null; };
+// polyline → runs of ≥2 points inside the rect (crossings interpolated to the rect edge).
+// `track` returns { pts, i0, n } per run: the fractional index of the run's first point in the
+// source polyline and the point count — bridge deck heights (per source vertex) ride along
+function clipLine(pts, track) {
+  const runs = [], metas = [];
+  let cur = null, curI0 = 0, curN = 0;
+  const endRun = () => { if (cur && cur.length >= 4) { runs.push(cur); metas.push({ i0: curI0, n: curN }); } cur = null; };
   for (let i = 0; i + 3 < pts.length; i += 2) {
     const ax = pts[i], az = pts[i + 1], bx = pts[i + 2], bz = pts[i + 3];
     const vis = segClip(ax, az, bx, bz);
@@ -141,13 +144,13 @@ function clipLine(pts) {
     const [t0, t1] = vis;
     const ex = snap(ax + (bx - ax) * t0), ez = snap(az + (bz - az) * t0);
     const lx = snap(ax + (bx - ax) * t1), lz = snap(az + (bz - az) * t1);
-    if (!cur) cur = [ex, ez];
-    else if (cur[cur.length - 2] !== ex || cur[cur.length - 1] !== ez) { endRun(); cur = [ex, ez]; }
-    if (cur[cur.length - 2] !== lx || cur[cur.length - 1] !== lz) cur.push(lx, lz);
+    if (!cur) { cur = [ex, ez]; curI0 = i + t0; curN = 1; }
+    else if (cur[cur.length - 2] !== ex || cur[cur.length - 1] !== ez) { endRun(); cur = [ex, ez]; curI0 = i + t0; curN = 1; }
+    if (cur[cur.length - 2] !== lx || cur[cur.length - 1] !== lz) { cur.push(lx, lz); curN++; }
     if (t1 < 1) endRun();
   }
   endRun();
-  return runs;
+  return track ? runs.map((r, i) => ({ pts: r, i0: metas[i].i0, n: metas[i].n })) : runs;
 }
 
 // Sutherland–Hodgman: ring (flat pts, not repeat-closed) → [clippedRing] | [] (identity if inside)
@@ -307,7 +310,8 @@ for (const el of roadsEls) {
   const lanes = isNaN(num(t.lanes)) ? (cls < 4 ? 2 : 1) : Math.round(num(t.lanes));
   const width = !isNaN(num(t.width)) ? num(t.width) : !isNaN(num(t.lanes)) ? num(t.lanes) * 3.5 + 2 : WDEF[cls];
   const speed = isNaN(num(t.maxspeed)) ? SDEF[cls] : num(t.maxspeed);
-  const rec = { cls, flags: oneway === -1 ? 1 : oneway, name: t.name || undefined, lanes, w10: Math.round(width * 10) };
+  // flags bit0 oneway(-1), bit1 bridge (deck heights ride in the record's ys; docs/mpk-format.md)
+  const rec = { cls, flags: (oneway === -1 ? 1 : oneway) | (t.bridge && t.bridge !== 'no' ? 2 : 0), name: t.name || undefined, lanes, w10: Math.round(width * 10) };
   ribbonLines.push({ pts, rec });
   stats.roadRecs++;
   if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed });
@@ -347,12 +351,8 @@ const COS15 = Math.cos(15 * Math.PI / 180);
     }
   }
   stats.mergedRoads = merged;
-  for (const l of ribbonLines) {
-    if (l.dead) continue;
-    const runs = clipLine(l.pts); // split at the bbox+2km edge; the graph below keeps the full way
-    for (const run of runs) assign(run, 'r', l.rec);
-    stats.roadRecs += runs.length;
-  }
+  // assign happens after the water pass: bridge decks (flags bit1) are decided against the water
+  // polygons, so the river geometry must be known before roads are packed into tiles
 }
 
 // ---------- graph ----------
@@ -378,7 +378,7 @@ for (const w of drivableWays) {
     for (let i = i1; i < i2; i++) { const dx = w.pts[i * 2 + 2] - w.pts[i * 2], dz = w.pts[i * 2 + 3] - w.pts[i * 2 + 1]; len += Math.hypot(dx, dz); }
     if (len < 0.5) continue; // degenerate sliver
     let [na, nb] = [a, b];
-    if (!w.flags && a > b) [na, nb] = [b, a]; // undirected edges are stored a < b
+    if (!(w.flags & 1) && a > b) [na, nb] = [b, a]; // undirected (bit0 off) edges are stored a < b
     for (const id of [na, nb]) if (!nodeIdx.has(id)) { nodeIdx.set(id, nodes.length); const [x, z] = nodeXY.get(id); nodes.push([Math.round(x * CM), Math.round(z * CM)]); }
     edges.push({ a: nodeIdx.get(na), b: nodeIdx.get(nb), cls: w.cls, flags: w.flags, name: w.name, lanes: w.lanes, speed: Math.round(w.speed), len: Math.max(1, Math.round(len)) });
   }
@@ -387,6 +387,7 @@ stats.graphNodes = nodes.length;
 stats.graphEdges = edges.length;
 
 // ---------- water ----------
+const waterPolys = []; // { pts, area (m², signed) } — bridge detection reads these before roads assign
 for (const el of waterEls) {
   const t = el.tags || {};
   if (el.type === 'way' && el.geometry) {
@@ -396,7 +397,10 @@ for (const el of waterEls) {
       const pts = ringPts(g);
       if (!pts || pts.length < 6) { stats.waterSkipped++; continue; }
       const rings = clipRing(pts);
-      for (const ring of rings) assign(closeRing(ring), 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
+      for (const ring of rings) {
+        assign(closeRing(ring), 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
+        waterPolys.push({ pts: ring, area: ringArea2(ring) });
+      }
       stats.waterPoly += rings.length;
     } else if (WLINE[t.waterway] !== undefined) {
       const pts = linePts(g);
@@ -411,11 +415,39 @@ for (const el of waterEls) {
       if (!closedRing(m.geometry)) { stats.relOuterOpen++; continue; }
       const pts = ringPts(m.geometry);
       if (!pts || pts.length < 6) continue;
-      for (const ring of clipRing(pts)) assign(closeRing(ring), 'w', { kind: waterPolyKind(t) });
+      for (const ring of clipRing(pts)) {
+        assign(closeRing(ring), 'w', { kind: waterPolyKind(t) });
+        waterPolys.push({ pts: ring, area: ringArea2(ring) });
+      }
       stats.waterPoly++;
     }
   }
 }
+
+// ---------- bridges + roads assign ----------
+// every way that crosses a big water polygon gets a deck: tagged by mappers, or auto-flagged when
+// the tag is missing (the recurring "road lies in the water" defect — detected, never re-approved).
+// Deck heights bake into the record per vertex (cm, ramps at both ends), the renderer builds the
+// structure from them. Untagged auto-detections are counted so a data fix upstream stays visible.
+let bridgesTagged = 0, bridgesAuto = 0;
+for (const l of ribbonLines) {
+  if (l.dead) continue;
+  if (l.rec.flags & 2) bridgesTagged++;
+  else if (crossesWater(l.pts, waterPolys)) { l.rec.flags |= 2; bridgesAuto++; }
+  if (l.rec.flags & 2) l.ys = deckHeights(l.pts, l.rec.cls <= 7 ? 5 : 3);
+  const runs = clipLine(l.pts, !!(l.rec.flags & 2)); // split at the bbox+2km edge; the graph keeps the full way
+  for (const run of runs) {
+    if (run.i0 === undefined) assign(run, 'r', l.rec);
+    else { // bridge run: slice the deck profile onto the clipped points (ends interpolate)
+      const ys = new Array(run.n);
+      for (let k = 0; k < run.n; k++) ys[k] = ysAt(l.ys, run.i0 + k);
+      assign(run.pts, 'r', { ...l.rec, ys });
+    }
+  }
+  stats.roadRecs += runs.length;
+}
+stats.bridgesTagged = bridgesTagged;
+stats.bridgesAuto = bridgesAuto;
 
 // ---------- green ----------
 for (const el of greenEls) {
@@ -499,6 +531,7 @@ console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${
 
 // ---------- pack QA: every shipped defect class is a gate here — a new city fails its build ----------
 console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
+console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridgesAuto} auto-flagged over water`);
 {
   const { qa } = await import('./qa.mjs');
   const rep = await qa('packs/grodno.mpk');
