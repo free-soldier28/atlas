@@ -4,8 +4,8 @@
 
 const ENGINE = 'atlas 0.1'; // engine version, shown in the drawer footer
 
-// city choice: ?city= wins, else the stored one, else the sample pack
-let CITY = 'sample';
+// city choice: ?city= wins, else the stored one, else Grodno — the embedded pack is the main build
+let CITY = 'grodno';
 try { CITY = QP.get('city') || localStorage.atlasCity || CITY; } catch {}
 const PACK_URL = `packs/${CITY}.mpk`;
 let CITIES = null; // manifest entries once packs/manifest.json loads: { cities: [{ id, name, url }] }
