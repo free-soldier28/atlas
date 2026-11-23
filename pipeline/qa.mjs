@@ -9,6 +9,7 @@
 //   waterOverlap water polygons containing buildings (a riverbank-style area over houses)
 //   bridges      roads over big water must carry flags bit1 with per-vertex deck heights
 //                (deck ≥ 1.2 m; non-bridge roads may not cross water polys ≥ 2000 m²)
+//   bridgeBuildings a building footprint may not stick through an elevated deck corridor
 //   roadJoints   road ribbon records meeting at an angle: the wedge around the joint must be
 //                covered by road triangles (the miter strip + end overshoot guarantee; the test
 //                catches a future ribbon regression without a screenshot)
@@ -19,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
 import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
+import { makeDeck, buildingHitsDeck } from './lib/bridge-conflicts.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const M2 = 2000; // the clip margin build-city applies (bbox + 2 km)
@@ -60,7 +62,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     }
     W.waters.push(...recs.w.map((w) => ({ pts: w.pts, ox, oz, tile: i })));
     W.lines.push(...recs.wl.map((w) => ({ pts: w.pts, hw: ({ 8: 12, 9: 4, 10: 12 })[w.kind] / 2, ox, oz, tile: i })));
-    W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId })));
+    W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId, top: (b.base10 + b.h10) / 10 })));
     W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, flags: r.flags, ys: r.ys })));
   }
   stats.tiles = P.h.tiles.length;
@@ -110,6 +112,21 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
       fix: [{ tile: r.tile, x: g[0], z: g[1] }] });
   }
   stats.bridges = nBridges;
+
+  // a building sticking through an elevated deck is bad source data: the bridge way includes its
+  // ramps into the bank. build-city drops these before packing; guard the packed result.
+  const decks = W.roads.filter((r) => (r.flags & 2) && r.ys && r.ys.length === r.pts.length / 2)
+    .map((r) => makeDeck(toWorld(r), r.ys, r.hw));
+  let deckBuildings = 0; const deckFix = [];
+  for (const b of W.blds) {
+    if (decks.some((d) => buildingHitsDeck(toWorld(b), b.top, d))) {
+      deckBuildings++;
+      if (deckFix.length < 6) deckFix.push({ osmId: b.osmId, x: b.ox + b.pts[0] / 100, z: b.oz + b.pts[1] / 100 });
+    }
+  }
+  if (deckBuildings) errors.push({ check: 'bridgeBuildings',
+    msg: `${deckBuildings} building(s) intersect an elevated bridge deck`, fix: deckFix });
+  stats.bridgeBuildingsDropped = deckBuildings;
 
   // ---------- render check: road joints covered (buildWorld once) ----------
   const W2 = await E.buildWorld(P);

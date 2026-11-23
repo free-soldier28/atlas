@@ -95,3 +95,27 @@ test('buildWorld: a bridge road renders an elevated deck with structure, a plain
   const flatTop = Math.max(...flat2.flatMap((m) => Array.from(new Float32Array(m.vb)).filter((v, k) => k % 5 === 1)));
   assert.ok(flatTop < 0.2, `a plain road must stay on the ground, got ${flatTop.toFixed(2)}`);
 });
+
+test('buildWorld: a bent bridge parapet shares mitered vertices at the corner', async () => {
+  const E = await engine();
+  // 100 m east then 100 m north, 5 m deck at the corner. Butt walls used to put two separate
+  // pairs of parapet-cap vertices at the bend; the miter must make the neighbouring segments
+  // share one pair per side (4 positions total, 2 per parapet).
+  const pts = [4000, 4000, 14000, 4000, 14000, 14000], ys = [6, 500, 6];
+  const B = new MPKBuilder({ id: 'bent-bridge', name: 'bent-bridge', attribution: 'test', origin: [54, 28], tileSize: 512, bbox: [53.99, 27.98, 54.01, 28.01] });
+  B.tile(0, 0, [[
+    { kind: 3, recs: [{ kind: 0, pts: [2000, 2000, 16000, 2000, 16000, 16000, 2000, 16000] }] },
+    { kind: 2, recs: [{ cls: 2, flags: 2, name: '', lanes: 2, w10: 120, pts, ys }] },
+  ]]);
+  const W = await E.buildWorld(E.mpkOpen(new Uint8Array(B.finish())));
+  const quay = W.meshes.filter((m) => new Uint8Array(m.vb)[16] === E.M.QUAY);
+  assert.ok(quay.length, 'bridge structure exists');
+  const cap = [];
+  for (const m of quay) {
+    const f = new Float32Array(m.vb);
+    for (let k = 0; k < f.length; k += 5) if (Math.abs(f[k + 1] - 6.15) < 0.02 && Math.hypot(f[k] + 116, f[k + 2] + 216) < 12) cap.push([f[k].toFixed(2), f[k + 2].toFixed(2)].join(','));
+  }
+  const distinct = new Set(cap);
+  assert.ok(distinct.size <= 4, `corner must have ≤4 shared cap vertices, got ${distinct.size}: ${[...distinct].join(' ')}`);
+  assert.ok(distinct.size >= 2, 'both parapets are present');
+});

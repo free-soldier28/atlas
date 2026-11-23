@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
 import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
+import { makeDeck, buildingHitsDeck, redundantDeck } from './lib/bridge-conflicts.mjs';
 import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
@@ -538,6 +539,41 @@ stats.waterBuildingsDropped = droppedBuildings;
 stats.waterRoadsElevated = elevatedRoads;
 stats.waterRoadsClipped = clippedRoads;
 stats.waterRunsKept = clippedRuns;
+
+// A tagged bridge way often includes its approach ramps into the bank, and the corridor sweeps
+// straight through a building left in OSM (the "deck through a house" defect). Drop those
+// buildings before packing — the same treatment as underwater ones — with a bbox prefilter so
+// 35k buildings × 150 decks stays cheap. QA re-checks the same rule on the packed result.
+const decks = [];
+for (const t of tiles.values()) {
+  const ox = t.tx * S, oz = t.tz * S;
+  for (const r of t.r) if ((r.flags & 2) && r.ys && r.ys.length === r.pts.length / 2) {
+    const p = [];
+    for (let k = 0; k < r.pts.length; k += 2) p.push(ox + r.pts[k] / CM, oz + r.pts[k + 1] / CM);
+    decks.push({ ...makeDeck(p, r.ys, (r.w10 || 80) / 20), tile: t, rec: r });
+  }
+}
+let droppedDeckBuildings = 0;
+for (const t of tiles.values()) {
+  const ox = t.tx * S, oz = t.tz * S;
+  t.b = t.b.filter((b) => {
+    const p = [];
+    for (let k = 0; k < b.pts.length; k += 2) p.push(ox + b.pts[k] / CM, oz + b.pts[k + 1] / CM);
+    const top = (b.base10 + b.h10) / 10;
+    if (decks.some((d) => buildingHitsDeck(p, top, d))) { droppedDeckBuildings++; return false; }
+    return true;
+  });
+}
+stats.deckBuildingsDropped = droppedDeckBuildings;
+
+// Two mapped bridges can cross at the same elevation: the short one's parapets then lie across
+// the long one's deck. Keep the longer way; stacked bridges differ by metres and are preserved.
+let droppedRedundantBridges = 0;
+for (const d of decks) if (decks.some((o) => o !== d && redundantDeck(d, o))) {
+  const i = d.tile.r.indexOf(d.rec);
+  if (i >= 0) { d.tile.r.splice(i, 1); droppedRedundantBridges++; }
+}
+stats.droppedRedundantBridges = droppedRedundantBridges;
 
 // ---------- poses: 6 real Grodno viewpoints (local metres via geoToLocal) ----------
 const [nemX, nemZ] = L(53.6790, 23.8170);   // over the Neman near the Soviet bridge

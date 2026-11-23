@@ -137,7 +137,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
   // floating ribbon read as a bridge
   const bridgeDeck = (mb, pts, hw, dx, dz, ycm) => {
     const y = ycm.map((v) => v / 100);
-    const { n, dirX, dirZ } = ribbonBase(pts, dx, dz, hw);
+    const { n, dirX, dirZ, off } = ribbonBase(pts, dx, dz, hw);
     if (n < 2) return;
     // vertical wall between the points (ax,az)@ay and (bx,bz)@by, hanging `drop` metres below
     // the top (clamped at the ground); both faces when the wall is seen from either side
@@ -147,22 +147,36 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       mb.quad(mb.v(ax, a0, az, nx, 0, nz), mb.v(bx, b0, bz, nx, 0, nz), mb.v(bx, by, bz, nx, 0, nz), mb.v(ax, ay, az, nx, 0, nz));
       if (both) mb.quad(mb.v(ax, ay, az, -nx, 0, -nz), mb.v(bx, by, bz, -nx, 0, -nz), mb.v(bx, b0, bz, -nx, 0, -nz), mb.v(ax, a0, az, -nx, 0, -nz));
     };
+    const lw = hw - 0.12, pw = hw + 0.1, ph = 1.1;
+    // ribbonBase solved the miters for the deck surface: scale its half-width offsets to the slab
+    // and parapet planes so consecutive segments SHARE their edge point. Butt walls used to leave
+    // wedge gaps at every bend and let the parapet caps shoot across the deck as white fins.
+    const edge = (i, w, s) => {
+      const cx = dx + pts[i * 2] / 100, cz = dz + pts[i * 2 + 1] / 100, k = w / hw, o = i * 4 + (s > 0 ? 2 : 0);
+      return [cx + (off[o] - cx) * k, cz + (off[o + 1] - cz) * k];
+    };
     for (let i = 0; i + 1 < n; i++) {
-      const px = dx + pts[i * 2] / 100, pz = dz + pts[i * 2 + 1] / 100, yi = y[i];
-      const qx = dx + pts[i * 2 + 2] / 100, qz = dz + pts[i * 2 + 3] / 100, yj = y[i + 1];
+      const yi = y[i], yj = y[i + 1];
       const nx = dirZ[i], nz = -dirX[i]; // outward normal of this segment
-      const lw = hw - 0.12, pw = hw + 0.1, ph = 1.1; // slab plane, parapet plane, parapet rise
       // deck slab sides: both faces (the deck is seen from above the water and from under it)
-      wall(px + nx * lw, pz + nz * lw, yi + 0.04, qx + nx * lw, qz + nz * lw, yj + 0.04, nx, nz);
-      wall(px - nx * lw, pz - nz * lw, yi + 0.04, qx - nx * lw, qz - nz * lw, yj + 0.04, -nx, -nz);
+      for (const s of [-1, 1]) {
+        const [ax, az] = edge(i, lw, s), [bx, bz] = edge(i + 1, lw, s);
+        wall(ax, az, yi + 0.04, bx, bz, yj + 0.04, nx * s, nz * s);
+      }
       // parapets: a 1.1 m wall just outside each deck edge + a 0.3 m top cap
       for (const s of [-1, 1]) {
         const nxs = nx * s, nzs = nz * s;
-        const ax = px + nxs * pw, az = pz + nzs * pw, bx = qx + nxs * pw, bz = qz + nzs * pw;
-        const cx = px + nxs * (pw + 0.3), cz = pz + nzs * (pw + 0.3), dxx = qx + nxs * (pw + 0.3), dzz = qz + nzs * (pw + 0.3);
+        const [ax, az] = edge(i, pw, s), [bx, bz] = edge(i + 1, pw, s);
+        const [cx, cz] = edge(i, pw + 0.3, s), [dxx, dzz] = edge(i + 1, pw + 0.3, s);
         wall(ax, az, yi + 0.05, bx, bz, yj + 0.05, nxs, nzs, ph);
         mb.quad(mb.v(ax, yi + ph + 0.05, az, 0, 1, 0), mb.v(bx, yj + ph + 0.05, bz, 0, 1, 0), mb.v(dxx, yj + ph + 0.05, dzz, 0, 1, 0), mb.v(cx, yi + ph + 0.05, cz, 0, 1, 0));
       }
+    }
+    // cut faces at both ends of the slab, so the ramp meets the road as a solid structure
+    for (const i of [0, n - 1]) {
+      const yy = y[i] + 0.04; if (yy < 0.2) continue;
+      const [ax, az] = edge(i, lw, -1), [bx, bz] = edge(i, lw, 1);
+      wall(ax, az, yy, bx, bz, yy, dirX[i] * (i ? 1 : -1), dirZ[i] * (i ? 1 : -1), 1e9);
     }
     // piers: every 24 m of the run's arc, only where the deck is high enough (never on the
     // ramps / banks) — the box hangs from the slab underside down to the ground
