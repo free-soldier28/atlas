@@ -116,7 +116,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   // a building sticking through an elevated deck is bad source data: the bridge way includes its
   // ramps into the bank. build-city drops these before packing; guard the packed result.
   const decks = W.roads.filter((r) => (r.flags & 2) && r.ys && r.ys.length === r.pts.length / 2)
-    .map((r) => makeDeck(toWorld(r), r.ys, r.hw));
+    .map((r) => makeDeck(toWorld(r), r.ys, r.hw, r.cls));
   let deckBuildings = 0; const deckFix = [];
   for (const b of W.blds) {
     if (decks.some((d) => buildingHitsDeck(toWorld(b), b.top, d))) {

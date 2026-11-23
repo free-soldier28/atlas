@@ -31,6 +31,14 @@ test('far buildings are rejected by the bbox prefilter', () => {
   assert.equal(buildingHitsDeck(far, 30, deck), false);
 });
 
+test('a footway bridge parallel inside a road bridge is its sidewalk, not a second deck', () => {
+  const road = makeDeck([0, 0, 20, 0, 40, 0], [6, 500, 6], 4, 5);
+  const walk = makeDeck([0, 3, 20, 3, 40, 3], [6, 300, 6], 1, 9);
+  assert.equal(redundantDeck(walk, road), true, 'parallel sidewalk is folded into the road deck');
+  const crossing = makeDeck([20, -20, 20, 20], [6, 300, 6], 1, 9);
+  assert.equal(redundantDeck(crossing, road), false, 'a perpendicular footbridge is a real crossing');
+});
+
 test('a short deck crossing a long one at the same height is redundant', () => {
   const long = makeDeck([0, 0, 100, 0, 200, 0, 300, 0, 400, 0], [6, 200, 500, 200, 6], 6);
   const short = makeDeck([90, 0, 110, 0], [6, 500, 6], 6); // crosses the long deck at x=100, both at 5 m

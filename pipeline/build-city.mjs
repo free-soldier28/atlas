@@ -551,7 +551,7 @@ for (const t of tiles.values()) {
   for (const r of t.r) if ((r.flags & 2) && r.ys && r.ys.length === r.pts.length / 2) {
     const p = [];
     for (let k = 0; k < r.pts.length; k += 2) p.push(ox + r.pts[k] / CM, oz + r.pts[k + 1] / CM);
-    decks.push({ ...makeDeck(p, r.ys, (r.w10 || 80) / 20), tile: t, rec: r });
+    decks.push({ ...makeDeck(p, r.ys, (r.w10 || 80) / 20, r.cls), tile: t, rec: r });
   }
 }
 let droppedDeckBuildings = 0;
