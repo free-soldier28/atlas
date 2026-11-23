@@ -34,10 +34,11 @@ test('shadows: far maps use a one-time coarse proxy of the whole pack', async ()
   assert.match(main, /await castProxy\(dst\[2\], 1400\)/, 'shelf map from proxy');
   assert.match(main, /await castProxy\(dst\[3\], 6800\)/, 'far map from proxy');
   assert.match(main, /const pShFarProxy = shPipe\(DFAR, 'none'\)/, 'proxy pipeline has no winding assumption');
-  assert.match(main, /P\.buildShadowProxy && P\.buildShadowProxy\(\)/, 'built once in the background');
+  assert.match(main, /if \(Wd\.buildShadowProxy\)/, 'proxy built before the first bake in every mode');
+  assert.match(world, /planTileData = tileData/, 'plan pass feeds the proxy');
   const E = await engine(), P = await openPack('packs/grodno.mpk');
-  const W = await E.buildWorld(P, { pool: 4, focus: [0, 0] });
-  const mesh = W.pool.buildShadowProxy();
+  const W = await E.buildWorld(P); // default (non-pool) world: the proxy must be available too
+  const mesh = W.buildShadowProxy();
   assert.ok(mesh.ni / 3 > 100000, `proxy has ${(mesh.ni / 3) | 0} triangles of full-city silhouettes`);
   assert.equal(mesh.pending, undefined, 'proxy geometry is real, not a counting stub');
 });

@@ -326,6 +326,32 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
   };
   const allInds = PK.h.tiles.map((_, i) => i);
+  let planTileData = null;
+  // Far shadow maps cover the whole city, but only a few tiles are meshed at startup. Build a coarse
+  // silhouette proxy from inflated tile records (plain prisms, no facades/windows): a few hundred
+  // thousand triangles, baked once into the far maps instead of leaving the horizon shadowless.
+  const buildShadowProxy = () => {
+    const mb = new MB(1 << 16); mb.mat = M.PLASTER;
+    const TILES = planTileData || PK.tiles;
+    for (let i = 0; i < PK.h.tiles.length; i++) {
+      const T = TILES[i]; if (!T) continue;
+      const ox = PK.h.tiles[i][0] * S, oz = PK.h.tiles[i][1] * S;
+      for (const L of T.lods.flat()) if (L.kind === 1) for (const r of L.recs) {
+        const n = r.pts.length >> 1; if (n < 3) continue;
+        const base = r.base10 / 10, top = base + r.h10 / 10;
+        if (top - base < 0.5) continue;
+        const b0 = mb.nv;
+        for (let k = 0; k < n; k++) {
+          const j = (k + 1) % n, dx = r.pts[j * 2] - r.pts[k * 2], dz = r.pts[j * 2 + 1] - r.pts[k * 2 + 1], L2 = hypot(dx, dz) || 1;
+          mb.v(ox + r.pts[k * 2] / 100, base, oz + r.pts[k * 2 + 1] / 100, dz / L2, 0, -dx / L2);
+        }
+        for (let k = 0; k < n; k++) mb.v(ox + r.pts[k * 2] / 100, top, oz + r.pts[k * 2 + 1] / 100, 0, 1, 0);
+        for (let k = 0; k < n; k++) { const j = (k + 1) % n; mb.quad(b0 + k, b0 + j, b0 + n + j, b0 + n + k); }
+        for (let k = 1; k < n - 1; k++) mb.tri(b0 + n, b0 + n + k, b0 + n + k + 1);
+      }
+    }
+    return mb.build();
+  };
   let fillNext = null, tilesFor = null, lazyRanges = null, focusOrder = null, filledCount = null, pool = null;
   // dry walk over a set of tiles: exact slot ranges for every tile, plus all labels/boxes/maps
   const planTiles = async (inds) => {
@@ -336,7 +362,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       tile(i, T);
       ranges[i].t1 = ctx.types.length; ranges[i].i1 = ctx.nI;
     });
-    setMBDry(false); planning = false;
+    setMBDry(false); planning = false; planTileData = tileData;
     return { tileData, ranges };
   };
   const nearest = (inds, fx, fz) => inds.slice().sort((a, b) => {
@@ -412,32 +438,8 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     };
     ctx = { meshes: poolMeshes, types: poolTypes, IB: poolIB, IF: poolIF, IU: poolIU, nI: P * capI };
     makeGround(); // the pack plane lives in the pool context too, so it survives the swap
-    // Distant shadow maps cover the whole city, but a streaming pool only holds 16 tiles. Build a
-    // coarse silhouette proxy from the plan pass (plain prisms, no facades/windows): a few hundred
-    // thousand triangles, baked once into the far maps instead of re-baking incomplete pool content.
-    const buildShadowProxy = () => {
-      const mb = new MB(1 << 16); mb.mat = M.PLASTER;
-      for (const i of allInds) {
-        const T = tileData[i]; if (!T) continue;
-        const ox = PK.h.tiles[i][0] * S, oz = PK.h.tiles[i][1] * S;
-        for (const L of T.lods.flat()) if (L.kind === 1) for (const r of L.recs) {
-          const n = r.pts.length >> 1; if (n < 3) continue;
-          const base = r.base10 / 10, top = base + r.h10 / 10;
-          if (top - base < 0.5) continue;
-          const b0 = mb.nv;
-          for (let k = 0; k < n; k++) {
-            const j = (k + 1) % n, dx = r.pts[j * 2] - r.pts[k * 2], dz = r.pts[j * 2 + 1] - r.pts[k * 2 + 1], L2 = hypot(dx, dz) || 1;
-            mb.v(ox + r.pts[k * 2] / 100, base, oz + r.pts[k * 2 + 1] / 100, dz / L2, 0, -dx / L2);
-          }
-          for (let k = 0; k < n; k++) mb.v(ox + r.pts[k * 2] / 100, top, oz + r.pts[k * 2 + 1] / 100, 0, 1, 0);
-          for (let k = 0; k < n; k++) { const j = (k + 1) % n; mb.quad(b0 + k, b0 + j, b0 + n + j, b0 + n + k); }
-          for (let k = 1; k < n - 1; k++) mb.tri(b0 + n, b0 + n + k, b0 + n + k + 1);
-        }
-      }
-      return mb.build();
-    };
     pool = { size: P, capT, capI, capM, capV, capX, meshes: poolMeshes, types: poolTypes,
-      inst: poolIB, nI: P * capI, nullTy, load, unload, nearest, slotState, buildShadowProxy,
+      inst: poolIB, nI: P * capI, nullTy, load, unload, nearest, slotState,
       loaded: () => slotState.reduce((n, i) => n + (i >= 0 ? 1 : 0), 0) };
   } else if (opts.lazy) {
     const inds = opts.limit ? allInds.slice(0, opts.limit) : allInds;
@@ -479,5 +481,5 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
   // type/put: the same closures, exposed so gps.js can add the vehicle marker after the build
   return { meshes: ctx.meshes, types: ctx.types, inst: ctx.IB.slice(0, ctx.nI * 48), nI: ctx.nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put,
     lazy: !!opts.lazy && !opts.pool, fillNext, tilesFor, ranges: lazyRanges, focusOrder, filledCount,
-    pool, nearest, tileSize: S, labels: dedupe(labels), strings: PK.h.strings || [] };
+    pool, nearest, tileSize: S, buildShadowProxy, labels: dedupe(labels), strings: PK.h.strings || [] };
 }

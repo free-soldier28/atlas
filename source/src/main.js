@@ -309,16 +309,6 @@ const startStream = () => {
   sync();
   if (rebakeShadows) rebakeShadows();
   setInterval(sync, 750); // camera-follow; sync() is a no-op until the nearest set actually changes
-  // background: one coarse silhouette of the whole pack replaces the incomplete pool content in
-  // the shelf/far maps. From then on every re-bake (streaming, night switch) uses the full proxy.
-  setTimeout(() => {
-    const t0 = performance.now(), mesh = P.buildShadowProxy && P.buildShadowProxy();
-    if (!mesh) return;
-    initShadowProxy(mesh);
-    if (rebakeShadows) rebakeShadows();
-    if (QP.has('log')) console.log(`shadow proxy: ${(mesh.ni / 3000).toFixed(0)}k triangles, ${((performance.now() - t0) / 1000).toFixed(2)} s`);
-    window.__shadowProxy = () => ({ triangles: mesh.ni / 3, ready: true });
-  }, 0);
 };
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
@@ -438,6 +428,14 @@ const bakeShadowMaps = async (dst) => {
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castProxy(dst[3], 6800); await Q.onSubmittedWorkDone();
 };
 const tShT0 = performance.now();
+// Build the full-city silhouette before the first bake, in every mode: lazy mode otherwise leaves
+// the far maps empty until the background filler finishes (minutes on a slow phone).
+if (Wd.buildShadowProxy) {
+  const t0 = performance.now(), mesh = Wd.buildShadowProxy();
+  initShadowProxy(mesh);
+  window.__shadowProxy = () => ({ triangles: mesh.ni / 3, ready: true });
+  if (QP.has('log')) console.log(`shadow proxy: ${(mesh.ni / 3000).toFixed(0)}k triangles, ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+}
 await bakeShadowMaps(tSh);
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
 // lazy tiles arrive after those maps were baked; once the queue drains, bake the active profile

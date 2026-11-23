@@ -23,8 +23,7 @@ const port = 9800 + (Date.now() % 400);
 const cp = spawn(CHROME, ['--window-position=60,60', '--window-size=1320,880', `--remote-debugging-port=${port}`,
   '--enable-unsafe-webgpu', `--user-data-dir=${dir}`, '--no-first-run', 'about:blank'], { stdio: 'ignore' });
 let nid = 0, ws = null;
-const pend = new Map();
-const logs = [];
+const pend = new Map(), logs = [];
 const send = (method, params = {}) => new Promise((res, rej) => { const id = ++nid; pend.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
 let list = null;
 for (let i = 0; i < 40 && !list; i++) { await sleep(250); try { list = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); } catch {} }
@@ -38,10 +37,10 @@ ws.onmessage = (e) => {
 };
 await send('Runtime.enable'); await send('Page.enable');
 const ev = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.result?.value;
-await send('Page.navigate', { url: `${BASE}/dev.html?auto&lazy&log&lv=1` });
+await send('Page.navigate', { url: `${BASE}/${process.argv[2] || 'dev.html?auto&lazy&log&lv=1'}` });
 let ready = false;
 for (let i = 0; i < 300 && !ready; i++) { await sleep(200); ready = await ev('window.__ready === true'); }
-if (!ready) throw new Error('engine never became ready');
+if (!ready) { for (const l of logs) console.log(l); throw new Error('engine never became ready'); }
 const early = await ev('window.__lazyProgress()');
 const dbg = await ev('JSON.stringify({shot:typeof window.__shot,fill:typeof window.__lazyFill,prog:typeof window.__lazyProgress,p:window.__lazyProgress&&window.__lazyProgress()})');
 console.log('hooks', dbg);
