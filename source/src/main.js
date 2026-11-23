@@ -309,6 +309,16 @@ const startStream = () => {
   sync();
   if (rebakeShadows) rebakeShadows();
   setInterval(sync, 750); // camera-follow; sync() is a no-op until the nearest set actually changes
+  // background: one coarse silhouette of the whole pack replaces the incomplete pool content in
+  // the shelf/far maps. From then on every re-bake (streaming, night switch) uses the full proxy.
+  setTimeout(() => {
+    const t0 = performance.now(), mesh = P.buildShadowProxy && P.buildShadowProxy();
+    if (!mesh) return;
+    initShadowProxy(mesh);
+    if (rebakeShadows) rebakeShadows();
+    if (QP.has('log')) console.log(`shadow proxy: ${(mesh.ni / 3000).toFixed(0)}k triangles, ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+    window.__shadowProxy = () => ({ triangles: mesh.ni / 3, ready: true });
+  }, 0);
 };
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
@@ -343,8 +353,8 @@ const gPipe = (cull) => device.createRenderPipeline({ layout: plScene, vertex: {
   fragment: { module: mG, entryPoint: 'fs', targets: ['rgba8unorm', HDR, 'rgba8unorm'].map((format) => ({ format, writeMask: 15 })) },
   primitive: { cullMode: cull }, depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
 const pG = gPipe('back');
-const shPipe = (format) => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
-  primitive: { cullMode: 'back' }, depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
+const shPipe = (format, cull = 'back') => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
+  primitive: { cullMode: cull }, depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
 const pWater = device.createRenderPipeline({ layout: plFx, vertex: { module: mFx, entryPoint: 'vs', buffers: vbLay },
   fragment: { module: mFx, entryPoint: 'fsWater', targets: [{ format: HDR }] }, primitive: { cullMode: 'none' },
   depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
@@ -382,6 +392,40 @@ const castInto = async (t, pipe, R = 0, A = LR, B = LU) => {
     if (n > 1) await ck(`bake ${t.width} tile ${i},${j}`);
   }
 };
+// Far maps need the whole city, not the 16 tiles in the pool. A coarse silhouette proxy is built
+// once from the plan pass (world.js) and drawn with its own tiny cull/indirect state; the city map
+// still comes from the live pool, so nearby shadows follow the camera.
+let proxy = null;
+const pShFarProxy = shPipe(DFAR, 'none'); // proxy prisms are generated without a winding guarantee
+const initShadowProxy = (mesh) => {
+  const vb = buf(new Uint8Array(mesh.vb), BU.VERTEX), ib = buf(mesh.ib, BU.INDEX);
+  const ibuf = new ArrayBuffer(48), f = new Float32Array(ibuf), u = new Uint32Array(ibuf);
+  f[3] = 1; f[10] = 1e9; f[11] = 1; u[8] = 0xffffffff; u[9] = 0; // one ALWAYS instance, rad 1e9
+  const bi = buf(new Uint8Array(ibuf), BU.STORAGE);
+  const tbuf = new ArrayBuffer(48), tu = new Uint32Array(tbuf), tf = new Float32Array(tbuf);
+  tu[0] = 0; tu[1] = NONE; tu[2] = NONE; tu[3] = NONE; tf[4] = tf[5] = tf[6] = 1e9;
+  const bt = buf(new Uint8Array(tbuf), BU.STORAGE), ba = buf(new Uint32Array([mesh.ni, 0, 0, 0, 0]), BU.STORAGE | BU.INDIRECT);
+  const bv = device.createBuffer({ size: 16, usage: BU.STORAGE });
+  proxy = { vb, ib, ba, cull: group(lCull, [ubo[V_SH], bi, bt, ba, bv]),
+    scene: group(lScene, [ubo[V_SH], sRep, sLin, bi, bv, tNoiseA, tNoiseN, tMap, tLand]) };
+};
+const castProxy = async (t, R, A = LR, B = LU) => {
+  if (!proxy) return castInto(t, pShFar, R, A, B); // before the proxy is ready: ordinary caster list
+  const n = R ? BAKEN : 1, U = UB[V_SH], sz = t.width / n;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (n > 1) {
+      const a0 = R * (2 * i / n - 1), a1 = a0 + 2 * R / n, b0 = R * (2 * j / n - 1), b1 = b0 + 2 * R / n;
+      plane(U, 0, A[0], A[1], A[2], 0, 0, 0, -a0); plane(U, 1, -A[0], -A[1], -A[2], 0, 0, 0, a1); plane(U, 2, B[0], B[1], B[2], 0, 0, 0, -b0); plane(U, 3, -B[0], -B[1], -B[2], 0, 0, 0, b1);
+    }
+    Q.writeBuffer(ubo[V_SH], 0, U);
+    const e = device.createCommandEncoder(), c = e.beginComputePass();
+    c.setBindGroup(0, proxy.cull); c.setPipeline(pReset); c.dispatchWorkgroups(1); c.setPipeline(pCull); c.dispatchWorkgroups(1); c.end();
+    const r = e.beginRenderPass(depthPass(t, i + j === 0)); r.setBindGroup(0, proxy.scene); r.setVertexBuffer(0, proxy.vb); r.setIndexBuffer(proxy.ib, 'uint32');
+    if (n > 1) r.setScissorRect(sz * i, sz * (n - 1 - j), sz, sz);
+    r.setPipeline(pShFarProxy); r.drawIndexedIndirect(proxy.ba, 0); r.end(); Q.submit([e.finish()]);
+    if (n > 1) await ck(`far proxy ${i},${j}`);
+  }
+};
 // one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main
 // matrix alone, so the frames of the active profile stay right while the other profile fills its textures
 const bakeShadowMaps = async (dst) => {
@@ -390,8 +434,8 @@ const bakeShadowMaps = async (dst) => {
   // at the finest LOD (lodb): a 23 cm texel can't tell them apart.
   U[O_LODB] = QL(0, mob ? 250 : 100, 250);
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, 480); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castInto(dst[2], pShFar, 1400); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, 6800); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castProxy(dst[2], 1400); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castProxy(dst[3], 6800); await Q.onSubmittedWorkDone();
 };
 const tShT0 = performance.now();
 await bakeShadowMaps(tSh);

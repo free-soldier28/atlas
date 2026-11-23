@@ -412,8 +412,32 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     };
     ctx = { meshes: poolMeshes, types: poolTypes, IB: poolIB, IF: poolIF, IU: poolIU, nI: P * capI };
     makeGround(); // the pack plane lives in the pool context too, so it survives the swap
+    // Distant shadow maps cover the whole city, but a streaming pool only holds 16 tiles. Build a
+    // coarse silhouette proxy from the plan pass (plain prisms, no facades/windows): a few hundred
+    // thousand triangles, baked once into the far maps instead of re-baking incomplete pool content.
+    const buildShadowProxy = () => {
+      const mb = new MB(1 << 16); mb.mat = M.PLASTER;
+      for (const i of allInds) {
+        const T = tileData[i]; if (!T) continue;
+        const ox = PK.h.tiles[i][0] * S, oz = PK.h.tiles[i][1] * S;
+        for (const L of T.lods.flat()) if (L.kind === 1) for (const r of L.recs) {
+          const n = r.pts.length >> 1; if (n < 3) continue;
+          const base = r.base10 / 10, top = base + r.h10 / 10;
+          if (top - base < 0.5) continue;
+          const b0 = mb.nv;
+          for (let k = 0; k < n; k++) {
+            const j = (k + 1) % n, dx = r.pts[j * 2] - r.pts[k * 2], dz = r.pts[j * 2 + 1] - r.pts[k * 2 + 1], L2 = hypot(dx, dz) || 1;
+            mb.v(ox + r.pts[k * 2] / 100, base, oz + r.pts[k * 2 + 1] / 100, dz / L2, 0, -dx / L2);
+          }
+          for (let k = 0; k < n; k++) mb.v(ox + r.pts[k * 2] / 100, top, oz + r.pts[k * 2 + 1] / 100, 0, 1, 0);
+          for (let k = 0; k < n; k++) { const j = (k + 1) % n; mb.quad(b0 + k, b0 + j, b0 + n + j, b0 + n + k); }
+          for (let k = 1; k < n - 1; k++) mb.tri(b0 + n, b0 + n + k, b0 + n + k + 1);
+        }
+      }
+      return mb.build();
+    };
     pool = { size: P, capT, capI, capM, capV, capX, meshes: poolMeshes, types: poolTypes,
-      inst: poolIB, nI: P * capI, nullTy, load, unload, nearest, slotState,
+      inst: poolIB, nI: P * capI, nullTy, load, unload, nearest, slotState, buildShadowProxy,
       loaded: () => slotState.reduce((n, i) => n + (i >= 0 ? 1 : 0), 0) };
   } else if (opts.lazy) {
     const inds = opts.limit ? allInds.slice(0, opts.limit) : allInds;
