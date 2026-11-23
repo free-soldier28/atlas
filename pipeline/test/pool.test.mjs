@@ -17,8 +17,8 @@ const hash = (m) => createHash('sha1').update(Buffer.from(m.vb)).update(Buffer.f
 
 test('pool: fixed footprint, ground survives the context swap', () => {
   assert.equal(W.pool.size, 8);
-  assert.equal(W.meshes.length, 8 * W.pool.capM + 2); // slot meshes + shared empty LOD + ground
-  assert.equal(W.types.length, 8 * W.pool.capT + 2); // slot types + null + ground (+ marker in the browser)
+  assert.equal(W.meshes.length, 8 * W.pool.capM + 3); // slot meshes + shared empty LOD + ground + crossings
+  assert.equal(W.types.length, 8 * W.pool.capT + 3); // slot types + null + ground + crossings (+ marker in the browser)
   assert.ok(W.pool.capV > 100000 && W.pool.capX > 150000, 'budgets cover the largest pack tile');
   assert.ok(W.meshes.some((m) => !m.pending && m.ni === 6), 'the pack ground plane is present');
   assert.equal(W.pool.loaded(), 0);
