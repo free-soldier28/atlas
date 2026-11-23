@@ -59,9 +59,8 @@ if (!ready) throw new Error('engine never became ready: ' + await evalJs('window
 console.log('ready, __info =', await evalJs('window.__info'));
 
 const spots = [
-  ['final-graze', 53.6822, 23.8255, 55, 210, -16],
-  ['final-topdown', 53.6805, 23.8329, 55, 160, -87],
-  ['final-river', 53.6805, 23.8270, 120, 250, -35],
+  ['road-hier', 53.6784, 23.8291, 90, 30, -40],
+  ['road-hier2', 53.6805, 23.8291, 60, 0, -35],
 ];
 for (const [name, lat, lon, y, yaw, pitch] of spots) {
   await evalJs("window.__cam(" + lat + ", " + lon + ", " + y + ", " + yaw + ", " + pitch + ")");

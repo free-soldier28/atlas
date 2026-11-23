@@ -56,8 +56,8 @@ if (!ready) throw new Error('engine never became ready: ' + await evalJs('window
 console.log('ready, __info =', await evalJs('window.__info'));
 
 const spots = [
-  ['flood-top', 53.6776, 23.8029, 600, 0, -80],     // straight down at the pack poly's centroid
-  ['flood-wide', 53.678, 23.810, 120, 300, -30],     // the user's district, wide view
+  ['river-wide', 53.678, 23.810, 300, 300, -45],
+  ['river-low', 53.6795, 23.8150, 90, 260, -25],
 ];
 for (const [name, lat, lon, y, yaw, pitch] of spots) {
   await evalJs(`window.__cam(${lat}, ${lon}, ${y}, ${yaw}, ${pitch})`);

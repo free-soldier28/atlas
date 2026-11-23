@@ -281,6 +281,12 @@ const bakeShadowMaps = async (dst) => {
 const tShT0 = performance.now();
 await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
+// the bake writes the map matrices into the shadow view only, and the light pass reads them from
+// the main view: without this copy the far maps sampled with zero matrices — shadows existed only
+// inside the camera cascade and flickered in and out as the cascade swept over the district
+shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true);
+shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true);
+shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true);
 {
   const U = UB[V_SH];
   // top-down height map for sky visibility: +-512 m, heights -60 .. 200 m (sun-independent: baked once)
@@ -476,8 +482,11 @@ function render() {
   U[O_CAM + 3] = t; U[O_JIT + 2] = fr;
   U[O_MISC] = F[RESET]; U[O_MISC + 1] = 0; U[O_MISC + 2] = LODK; U[O_MISC + 3] = 1; U[O_LODC] = cx; U[O_LODC + 1] = cy; U[O_LODC + 2] = cz; U[O_LODC + 3] = 1 / LODK;
   if (CASC) {
-    // cascade: a 92 m box around the point 36 m ahead of the camera
-    shadowMat(O_SM, cx + U[O_FWD] * 36, cy + U[O_FWD + 1] * 36, cz + U[O_FWD + 2] * 36, 46, -420, 700, CASC, true);
+    // cascade: a 92 m box around the point 36 m ahead of the camera, snapped to its own texel
+    // grid — an unsnapped sliding box re-rasterizes the shadow map every frame and the shadow
+    // edges crawl as the camera drifts
+    const ts = 92 / CASC, ax = cx + U[O_FWD] * 36, az = cz + U[O_FWD + 2] * 36;
+    shadowMat(O_SM, Math.round(ax / ts) * ts, cy + U[O_FWD + 1] * 36, Math.round(az / ts) * ts, 46, -420, 700, CASC, true);
     // casters switch LODs only a little sooner, or shadows pop on their own
     S[O_CAM + 3] = t; S[O_MISC + 1] = 2; S[O_MISC + 2] = 1.85 * LODK; S[O_MISC + 3] = 1; S[O_LODC] = cx; S[O_LODC + 1] = cy; S[O_LODC + 2] = cz;
     Q.writeBuffer(ubo[V_SH], 0, S);

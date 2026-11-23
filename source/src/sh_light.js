@@ -24,7 +24,9 @@ fn shadow(p: vec3f, n: vec3f) -> f32 {
   let e = inMap(view.sm[0], p);
   if (e >= .96) { return farShadow(p, n, so); }
   let s = shTap(tSh0, view.sm[0], p + n * (.03 + .08 * so), 1.6 / ${CASC || 2048}.);
-  if (e > .84) { return mix(s, farShadow(p, n, so), (e - .84) / .12); }
+  // the cascade's and the baked maps' offsets differ by up to a metre: blend over a wide ring so
+  // the sweep of the camera box cannot pop the shadow edges back and forth
+  if (e > .70) { return mix(s, farShadow(p, n, so), (e - .70) / .26); }
   return s;
 }
 `;
