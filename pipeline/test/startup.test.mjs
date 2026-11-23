@@ -38,8 +38,8 @@ test('startup: geolocation is fired early and only moves the camera after readin
 test('startup: tiles inflated in parallel batches, every tile still reaches the world', async () => {
   const w = src('world.js');
   assert.match(w, /const TB = 24;/, 'batched prefetch width');
-  assert.match(w, /const prefetch = \(b\) => Promise\.all\(/, 'prefetch uses Promise.all over a batch');
-  assert.match(w, /incoming = prefetch\(i \+ 1\)/, 'next batch starts while the current one is meshed');
+  assert.match(w, /const inflate = \(inds\) => Promise\.all\(/, 'prefetch uses Promise.all over a batch');
+  assert.match(w, /incoming = inflate\(inds\.slice\(k \+ 1/, 'next batch starts while the current one is meshed');
   const P = await openPack('packs/grodno.mpk');
   P.tiles.clear(); // force the cold path: all inflation happens through the prefetch batches
   const W = await (await engine()).buildWorld(P);

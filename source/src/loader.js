@@ -13,19 +13,20 @@ const EMBEDDED_PACK = /*PACK*/null;
 let PK = null; // opened pack (mpkOpen result) once loadPack() has run
 
 async function loadPack(url = PACK_URL) {
-  // city menu: the manifest is optional (absent on file:// where fetch cannot read it)
-  try { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } } catch {}
+  // city menu: on file:// there is no manifest (fetch would log a CORS error), so go straight to the pack
+  try {
+    if (location.protocol !== 'file:') { const r = await fetch('packs/manifest.json'); if (r.ok) { CITIES = await r.json(); mkCities(); } }
+  } catch {}
   const m = CITIES && CITIES.cities.find((c) => c.id === CITY), u = m ? m.url : url;
   // an embedded pack serves file:// and offline opens (no manifest to choose from); a city picked
   // in the drawer or ?city= overrides it, so the switcher actually switches
-  let u8;
-  if (EMBEDDED_PACK && !m) u8 = Uint8Array.from(atob(EMBEDDED_PACK), (c) => c.charCodeAt(0));
-  else {
-    const r = await fetch(u);
-    if (!r.ok) fail(`city pack ${u}: HTTP ${r.status}${CITY !== 'sample' ? ' (drawer, City: Sample)' : ''}`);
-    u8 = new Uint8Array(await r.arrayBuffer());
-  }
-  PK = mpkOpen(u8);
+  let src;
+  if (EMBEDDED_PACK && !m) src = await openRange(u, fetch, { bytes: Uint8Array.from(atob(EMBEDDED_PACK), (c) => c.charCodeAt(0)) });
+  else src = await openRange(u, fetch, { forceFull: QP.has('norange') });
+  PK = mpkOpen(src.u8);
+  if (src.read) PK.read = src.read; // tiles + graph come from Range reads, not one big buffer
+  PK.range = { ranged: src.ranged, total: src.total };
+  if (QP.has('log')) console.log(`pack source: ${src.ranged ? `range (${src.total} bytes on disk)` : 'in memory'}`);
   // the loading plate and the drawer footer say what the pack says about itself
   const cn = $('cn'); if (cn) cn.textContent = PK.h.name || '';
   const at = $('at'); if (at && PK.h.attribution) at.textContent = PK.h.attribution;

@@ -27,13 +27,14 @@ export const engine = async () => {
       src('math.js'),
       'const LV = 0; const QL = (h, m, l) => (LV > 1 ? l : LV ? m : h);', // quality.js slot, LV=0 semantics
       src('format.js'),
+      src('range.js'),
       src('globals.js'),
       /^const M = \{[^}]*\};/m.exec(src('sh_scene.js'))[0], // material ids, verbatim from sh_scene.js
       src('citygen.js'),
       src('labels.js'),
       src('world.js'),
     ].join('\n');
-    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld, dedupe, place };');
+    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld, dedupe, place, setMBDry, openRange };');
     return globalThis.__atlasEngine;
   })();
   return bootPromise;
@@ -45,4 +46,5 @@ export const openPack = async (rel) => {
   return E.mpkOpen(new Uint8Array(readFileSync(path.join(root, rel))));
 };
 
+export const openRange = async (...a) => (await engine()).openRange(...a);
 export const geoToLocal = (lat, lon, lat0, lon0) => [(lon - lon0) * Math.cos(lat0 * Math.PI / 180) * 111320, -(lat - lat0) * 111320];

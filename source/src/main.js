@@ -189,15 +189,32 @@ await say('Loading map pack…', 0.18);
 await loadPack();
 if (PK.h.poses) POSES = PK.h.poses; // viewpoints for keys 1-6 come from the pack when it has them
 if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through replaces the default lap
-const Wd = await buildWorld(PK);
+// Lazy tiles: interactive sessions mesh only the 3x3 tiles around the start camera before the first
+// frame; the rest are filled in the background. AUTO probes stay deterministic (full build) unless
+// they pass ?lazy explicitly, and ?full forces the old eager path in the browser.
+// Phase B: ?pool=N turns on the streaming tile pool (fixed GPU footprint, camera-follow loads).
+const POOL = QP.has('pool') ? clamp(+QP.get('pool') || 16, 4, 64) : 0;
+const LAZY = !POOL && (QP.has('lazy') || (!AUTO && !QP.has('full')));
+const focus = POSES.length ? [POSES[0][0], POSES[0][2]] : [0, 0];
+const nTiles = QP.has('tiles') ? max(1, min(PK.h.tiles.length, +QP.get('tiles') || 9)) : 9;
+const Wd = await buildWorld(PK, POOL ? { pool: POOL, focus } : LAZY ? { lazy: true, focus, count: nTiles, limit: QP.has('tiles') ? nTiles : 0 } : {});
 landY = Wd.ground; setHard(Wd.hard); setBoxes(Wd.bboxes); // collision ground, old shape lists (empty), building boxes
 const MK = mkMarker(Wd); // vehicle marker: mesh + type + one ALWAYS instance through the world's own type()/put()
 await say('Planting gardens…', 0.7);
 let nV = 0, nIx = 0;
-for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; m.ni = m.ib.length; nV += m.nv; nIx += m.ni; }
-// upload each mesh separately and drop it, so geometry never sits in memory twice (phones)
+if (Wd.pool) {
+  // pool slots have a fixed footprint: allocate once for the worst tile, then rewrite in place
+  const P = Wd.pool; nV = P.size * P.capV; nIx = P.size * P.capX;
+  for (const m of P.meshes) {
+    if (m.slot !== undefined) { m.v0 = m.slot * P.capV; m.i0 = m.slot * P.capX; }
+    else { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; } // dummy + vehicle marker live past the slots
+  }
+} else for (const m of Wd.meshes) { m.v0 = nV; m.i0 = nIx; nV += m.nv; nIx += m.ni; }
+// upload each mesh separately and drop it, so geometry never sits in memory twice (phones).
+// Lazy tiles still in the queue have reserved nv/ni but no vb/ib — their indirect draws stay at
+// zero index count until fillNext() writes the geometry and refreshes those slots.
 const vbMesh = device.createBuffer({ size: max(16, nV * 20), usage: BU.VERTEX | BU.COPY_DST }), ibMesh = device.createBuffer({ size: max(16, nIx * 4), usage: BU.INDEX | BU.COPY_DST });
-for (const m of Wd.meshes) { if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb); if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib); m.vb = m.ib = null; }
+for (const m of Wd.meshes) { if (m.pending) continue; if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb); if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib); m.vb = m.ib = null; }
 const bInst = buf(new Uint8Array(Wd.nI * 48 + 48), BU.STORAGE); Q.writeBuffer(bInst, 0, Wd.inst); // extra slot: the vehicle marker
 markerBuf(bInst, MK * 48); gpsStart(); // marker's instance slot; then GPS per the query params
 await ck('geometry');
@@ -208,14 +225,92 @@ if (AUTO) console.log(`${Wd.meshes.length} meshes · ${(nV / 1e6).toFixed(2)} M 
 const slots = [], NONE = 0xffffffff;
 const tyData = new ArrayBuffer(Wd.types.length * 48), tyU = new Uint32Array(tyData), tyF = new Float32Array(tyData); // struct MType in sh_scene.js
 let nVis = 0;
+const slotsByMesh = new Map(); // reverse index for the lazy filler: filled mesh → indirect slots
 Wd.types.forEach((t, i) => {
-  for (let l = 0; l < 4; l++) { if (l < t.lods.length) { tyU[i * 12 + l] = slots.length; slots.push({ mesh: Wd.meshes[t.lods[l]], kind: t.kind, flags: t.flags, first: nVis, n: t.n, lod: l }); nVis += t.n; } else tyU[i * 12 + l] = NONE; }
+  for (let l = 0; l < 4; l++) { if (l < t.lods.length) { tyU[i * 12 + l] = slots.length; const s = { mesh: Wd.meshes[t.lods[l]], kind: t.kind, flags: t.flags, first: nVis, n: t.n, lod: l }; slots.push(s); let a = slotsByMesh.get(s.mesh); if (!a) slotsByMesh.set(s.mesh, a = []); a.push(slots.length - 1); nVis += t.n; } else tyU[i * 12 + l] = NONE; }
   tyF.set(t.d, i * 12 + 4); tyF[i * 12 + 8] = t.d23;
 });
 const argData = new Uint32Array(slots.length * 5);
-slots.forEach((s, i) => argData.set([s.mesh.ni, 0, s.mesh.i0, s.mesh.v0, s.first], i * 5));
+slots.forEach((s, i) => argData.set([s.mesh.pending ? 0 : s.mesh.ni, 0, s.mesh.i0, s.mesh.v0, s.first], i * 5));
 const bTypes = buf(new Uint8Array(tyData), BU.STORAGE);
 const bArgs = [0, 1].map(() => buf(argData, BU.STORAGE | BU.INDIRECT | BU.COPY_SRC)), bVis = [0, 1].map(() => device.createBuffer({ size: max(16, nVis * 4), usage: BU.STORAGE }));
+// Lazy filler: upload each finished tile into the slot block reserved by the plan pass, refresh
+// its instance rows (the radii are real now) and switch its indirect draws on. Everything above is
+// static, so the cull/shadow/render pipelines and bind groups never need rebuilding.
+let rebakeShadows = null, rebaked = false, shadowBaking = 0;
+window.__shadowIdle = () => new Promise((res) => { const f = () => shadowBaking ? setTimeout(f, 50) : res(true); f(); });
+const startFill = () => {
+  if (!Wd.lazy) return;
+  const arg = new Uint32Array(5), total = Wd.focusOrder.length;
+  const upload = (i) => {
+    for (const m of Wd.tilesFor(i)) {
+      if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb);
+      if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib);
+      m.vb = m.ib = null; m.pending = 0;
+      arg[0] = m.ni; arg[1] = 0; arg[2] = m.i0; arg[3] = m.v0;
+      for (const si of slotsByMesh.get(m) || []) { arg[4] = slots[si].first; Q.writeBuffer(bArgs[0], si * 20, arg); Q.writeBuffer(bArgs[1], si * 20, arg); }
+    }
+    const r = Wd.ranges[i];
+    if (r) Q.writeBuffer(bInst, r.i0 * 48, Wd.inst.slice(r.i0 * 48, r.i1 * 48));
+  };
+  const pump = () => {
+    const got = Wd.fillNext(8, 4);
+    for (const i of got) upload(i);
+    if (Wd.filledCount() === total && rebakeShadows && !rebaked) { rebaked = true; rebakeShadows(); }
+    if (Wd.filledCount() < total) schedule();
+  };
+  const schedule = () => { if (typeof requestIdleCallback === 'function') requestIdleCallback(pump, { timeout: 120 }); else setTimeout(pump, 0); };
+  window.__lazyFill = () => { let n = 0; for (;;) { const got = Wd.fillNext(64, 1e9); if (!got.length) break; for (const i of got) upload(i); n += got.length; } return n; };
+  window.__lazyProgress = () => `${Wd.filledCount()}/${total}`;
+  schedule();
+};
+// Phase B streaming controller: keep the nearest tiles in the fixed pool. A swap rewrites only
+// that slot's geometry, type record, 4 indirect draws and instance rows — no buffers or bind groups
+// are recreated, so a camera move costs one tile's meshing instead of a world rebuild.
+const startStream = () => {
+  if (!Wd.pool) return;
+  const P = Wd.pool, arg = new Uint32Array(5), tBuf = new ArrayBuffer(48), tU = new Uint32Array(tBuf), tF = new Float32Array(tBuf);
+  const publish = (r) => {
+    for (const m of r.meshes) {
+      if (m.nv) Q.writeBuffer(vbMesh, m.v0 * 20, m.vb);
+      if (m.ni) Q.writeBuffer(ibMesh, m.i0 * 4, m.ib);
+      m.vb = m.ib = null;
+    }
+    r.types.forEach((t, k) => {
+      const idx = r.t0 + k;
+      for (let l = 0; l < 4; l++) {
+        tU[l] = t.lods[l]; tF[4 + l] = t.d[l];
+        tyU[idx * 12 + l] = tU[l]; tyF[idx * 12 + 4 + l] = tF[4 + l];
+        const si = tU[l]; // the slot index the cull shader will emit into for this LOD
+        const mesh = Wd.meshes[t.lods[l]]; slots[si].mesh = mesh;
+        arg[0] = mesh.ni; arg[1] = 0; arg[2] = mesh.i0; arg[3] = mesh.v0; arg[4] = slots[si].first;
+        Q.writeBuffer(bArgs[0], si * 20, arg); Q.writeBuffer(bArgs[1], si * 20, arg);
+      }
+      tF[8] = t.d23; tyF[idx * 12 + 8] = tF[8];
+      Q.writeBuffer(bTypes, idx * 48, tBuf);
+    });
+    Q.writeBuffer(bInst, r.i0 * 48, P.inst.slice(r.i0 * 48, r.i1 * 48));
+  };
+  const inds = PK.h.tiles.map((_, i) => i);
+  let lastBake = 0;
+  const sync = () => {
+    const want = P.nearest(inds, F[CX], F[CZ]).slice(0, P.size);
+    let changed = 0;
+    for (let s = 0; s < P.size; s++) { const t = P.slotState[s]; if (t >= 0 && !want.includes(t)) { publish(P.unload(s)); changed++; } }
+    for (const t of want) if (!P.slotState.includes(t)) {
+      const s = P.slotState.indexOf(-1); if (s < 0) break;
+      publish(P.load(s, t)); changed++;
+    }
+    if (changed && rebakeShadows && performance.now() - lastBake > 1500) { lastBake = performance.now(); rebakeShadows(); }
+    return changed;
+  };
+  window.__stream = sync;
+  window.__cam = () => [F[CX], F[CY], F[CZ]];
+  window.__poolState = () => `${P.loaded()}/${P.size} tiles · ${((nV * 20 + nIx * 4 + Wd.nI * 48) / 1048576).toFixed(0)} MB reserved · ${P.slotState.join(',')}`;
+  sync();
+  if (rebakeShadows) rebakeShadows();
+  setInterval(sync, 750); // camera-follow; sync() is a no-op until the nearest set actually changes
+};
 const lCull = layout('urrww', SS.COMPUTE), mCull = mod(W_CULL, 'cull');
 const pReset = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'reset' } }), pCull = device.createComputePipeline({ layout: plOf(lCull), compute: { module: mCull, entryPoint: 'cull' } });
 const bgCull = [0, 1].map((v) => group(lCull, [ubo[v], bInst, bTypes, bArgs[v], bVis[v]]));
@@ -249,8 +344,8 @@ const gPipe = (cull) => device.createRenderPipeline({ layout: plScene, vertex: {
   fragment: { module: mG, entryPoint: 'fs', targets: ['rgba8unorm', HDR, 'rgba8unorm'].map((format) => ({ format, writeMask: 15 })) },
   primitive: { cullMode: cull }, depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
 const pG = gPipe('back');
-const shPipe = (format) => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
-  primitive: { cullMode: 'back' }, depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
+const shPipe = (format, cull = 'back') => device.createRenderPipeline({ layout: plScene, vertex: { module: mSh, entryPoint: 'vs', buffers: vbLay },
+  primitive: { cullMode: cull }, depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.2 } });
 const pWater = device.createRenderPipeline({ layout: plFx, vertex: { module: mFx, entryPoint: 'vs', buffers: vbLay },
   fragment: { module: mFx, entryPoint: 'fsWater', targets: [{ format: HDR }] }, primitive: { cullMode: 'none' },
   depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' } });
@@ -260,10 +355,11 @@ await ck('scene pipelines');
 await say('Casting shadows…', 0.8);
 // sizes: SHN in quality.js; with no cascade one texel stands in
 const D16 = 'depth16unorm', DFAR = SH32 ? DEPTH : D16;
-const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
-// the night profile's baked maps: allocated now (two sets fit), filled by the first switch to night
-const tShN = [tSh[0], tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
-const shReady = [false, false]; // per profile: its baked maps are valid (the camera cascade tSh[0] is shared)
+const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT | TU.COPY_SRC), tex(SHN[2], SHN[2], DFAR, RT | TU.COPY_SRC), tex(SHN[3], SHN[3], DFAR, RT | TU.COPY_SRC)];
+// One set of baked maps for both profiles: the sun turns with N, so the maps are re-baked on a
+// switch (a short hitch) instead of holding a second 40+ MB set resident. The camera cascade is shared.
+const tShN = tSh;
+
 const pSh32 = CASC ? shPipe(DEPTH) : null, pSh16 = shPipe(D16), pShFar = SH32 ? pSh32 : pSh16, tTop = tex(TOPPX, TOPPX, 'r16float', RT, { mips: 8 });
 const depthPass = (t, clear = true) => ({ colorAttachments: [], depthStencilAttachment: { view: t.createView(), depthClearValue: 1, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store' } });
 const drawList = (r, v, list) => { for (let i = 0; i < list.length; i++) r.drawIndexedIndirect(bArgs[v], list[i] * 20); };
@@ -287,20 +383,92 @@ const castInto = async (t, pipe, R = 0, A = LR, B = LU) => {
     if (n > 1) await ck(`bake ${t.width} tile ${i},${j}`);
   }
 };
+// Far maps need the whole city, not the 16 tiles in the pool. A coarse silhouette proxy is built
+// once from the plan pass (world.js) and drawn with its own tiny cull/indirect state; the city map
+// still comes from the live pool, so nearby shadows follow the camera.
+let proxy = null;
+const pShFarProxy = shPipe(DFAR, 'none'); // proxy prisms are generated without a winding guarantee
+const initShadowProxy = (mesh) => {
+  const vb = buf(new Uint8Array(mesh.vb), BU.VERTEX), ib = buf(mesh.ib, BU.INDEX);
+  const ibuf = new ArrayBuffer(48), f = new Float32Array(ibuf), u = new Uint32Array(ibuf);
+  f[3] = 1; f[10] = 1e9; f[11] = 1; u[8] = 0xffffffff; u[9] = 0; // one ALWAYS instance, rad 1e9
+  const bi = buf(new Uint8Array(ibuf), BU.STORAGE);
+  const tbuf = new ArrayBuffer(48), tu = new Uint32Array(tbuf), tf = new Float32Array(tbuf);
+  tu[0] = 0; tu[1] = NONE; tu[2] = NONE; tu[3] = NONE; tf[4] = tf[5] = tf[6] = 1e9;
+  const bt = buf(new Uint8Array(tbuf), BU.STORAGE), ba = buf(new Uint32Array([mesh.ni, 0, 0, 0, 0]), BU.STORAGE | BU.INDIRECT);
+  const bv = device.createBuffer({ size: 16, usage: BU.STORAGE });
+  proxy = { vb, ib, ba, cull: group(lCull, [ubo[V_SH], bi, bt, ba, bv]),
+    scene: group(lScene, [ubo[V_SH], sRep, sLin, bi, bv, tNoiseA, tNoiseN, tMap, tLand]) };
+};
+const castProxy = async (t, R, A = LR, B = LU) => {
+  if (!proxy) return castInto(t, pShFar, R, A, B); // before the proxy is ready: ordinary caster list
+  const n = R ? BAKEN : 1, U = UB[V_SH], sz = t.width / n;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (n > 1) {
+      const a0 = R * (2 * i / n - 1), a1 = a0 + 2 * R / n, b0 = R * (2 * j / n - 1), b1 = b0 + 2 * R / n;
+      plane(U, 0, A[0], A[1], A[2], 0, 0, 0, -a0); plane(U, 1, -A[0], -A[1], -A[2], 0, 0, 0, a1); plane(U, 2, B[0], B[1], B[2], 0, 0, 0, -b0); plane(U, 3, -B[0], -B[1], -B[2], 0, 0, 0, b1);
+    }
+    Q.writeBuffer(ubo[V_SH], 0, U);
+    const e = device.createCommandEncoder(), c = e.beginComputePass();
+    c.setBindGroup(0, proxy.cull); c.setPipeline(pReset); c.dispatchWorkgroups(1); c.setPipeline(pCull); c.dispatchWorkgroups(1); c.end();
+    const r = e.beginRenderPass(depthPass(t, i + j === 0)); r.setBindGroup(0, proxy.scene); r.setVertexBuffer(0, proxy.vb); r.setIndexBuffer(proxy.ib, 'uint32');
+    if (n > 1) r.setScissorRect(sz * i, sz * (n - 1 - j), sz, sz);
+    r.setPipeline(pShFarProxy); r.drawIndexedIndirect(proxy.ba, 0); r.end(); Q.submit([e.finish()]);
+    if (n > 1) await ck(`far proxy ${i},${j}`);
+  }
+};
 // one profile's three baked maps (city, shelf, mountains): shadowMat with `views` false leaves the main
 // matrix alone, so the frames of the active profile stay right while the other profile fills its textures
 const bakeShadowMaps = async (dst) => {
+  shadowBaking++;
+  try {
   const U = UB[V_SH]; U[O_MISC + 1] = 2; U[O_MISC + 2] = 0; U[O_MISC + 3] = 0; U[O_LODC] = 0; U[O_LODC + 1] = 0; U[O_LODC + 2] = 0;
   // each map draws only what lies inside its own box seen from the sun (planes set by shadowMat). Medium/Low never cast
   // at the finest LOD (lodb): a 23 cm texel can't tell them apart.
   U[O_LODB] = QL(0, mob ? 250 : 100, 250);
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true, false); await castInto(dst[1], pSh16, 480); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castInto(dst[2], pShFar, 1400); await Q.onSubmittedWorkDone();
-  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, 6800); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true, false); U[O_MISC + 2] = 0.2; await castProxy(dst[2], 1400); await Q.onSubmittedWorkDone();
+  shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castProxy(dst[3], 6800); await Q.onSubmittedWorkDone();
+  } finally { shadowBaking--; }
 };
 const tShT0 = performance.now();
-await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
+// Build the full-city silhouette before the first bake, in every mode: lazy mode otherwise leaves
+// the far maps empty until the background filler finishes (minutes on a slow phone).
+if (Wd.buildShadowProxy) {
+  const t0 = performance.now(), mesh = Wd.buildShadowProxy();
+  initShadowProxy(mesh);
+  window.__shadowProxy = () => ({ triangles: mesh.ni / 3, ready: true });
+  if (QP.has('log')) console.log(`shadow proxy: ${(mesh.ni / 3000).toFixed(0)}k triangles, ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+}
+await bakeShadowMaps(tSh);
+// Regression hook: sample the baked maps. An empty map is a constant clear value (variance 0),
+// so a dropped proxy or a skipped bake is caught without eyeballing screenshots.
+window.__shadowStats = async () => {
+  const out = {};
+  for (const k of [1, 2, 3]) {
+    const t = tSh[k], f32 = k >= 2 && SH32, bpe = f32 ? 4 : 2;
+    // WebGPU requires a whole-subresource copy for depth formats — sample the centre afterwards.
+    const bpr = Math.ceil(t.width * bpe / 256) * 256;
+    const buf = device.createBuffer({ size: bpr * t.height, usage: BU.COPY_DST | BU.MAP_READ });
+    const e = device.createCommandEncoder();
+    e.copyTextureToBuffer({ texture: t }, { buffer: buf, bytesPerRow: bpr }, [t.width, t.height, 1]);
+    Q.submit([e.finish()]); await buf.mapAsync(GPUMapMode.READ);
+    const a = f32 ? new Float32Array(buf.getMappedRange()) : new Uint16Array(buf.getMappedRange());
+    const stride = bpr / bpe; let mn = Infinity, mx = -Infinity, s = 0, s2 = 0, n = 0;
+    // sample the whole map with a stride, not just the centre: a valid night map may put its
+    // casters away from the centre for a different sun direction.
+    const step = 8;
+    for (let j = 0; j < t.height; j += step) for (let i = 0; i < t.width; i += step) { const v = a[j * stride + i]; mn = min(mn, v); mx = max(mx, v); s += v; s2 += v * v; n++; }
+    buf.unmap(); const mean = s / n;
+    out[k] = { min: +mn.toFixed(4), max: +mx.toFixed(4), variance: +(s2 / n - mean * mean).toFixed(4) };
+  }
+  return out;
+};
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
+// lazy tiles arrive after those maps were baked; once the queue drains, bake the active profile
+// again so distant casters are present. The same helper fills the inactive profile at night switches.
+rebakeShadows = () => { bakeShadowMaps(tSh); };
+startFill(); // overlap the remaining tile meshing with pipeline setup and the first frames
 // the bake writes the map matrices into the shadow view only, and the light pass reads them from
 // the main view: without this copy the far maps sampled with zero matrices — shadows existed only
 // inside the camera cascade and flickered in and out as the cascade swept over the district
@@ -467,13 +635,11 @@ const setNight = async (n) => {
   night = n;
   ACTIVE_SUN = n ? NIGHT_SUN : SUN; LR = vnorm([ACTIVE_SUN[2], 0, -ACTIVE_SUN[0]]); LU = vcross(ACTIVE_SUN, LR);
   for (const U of UB) setViewSun(U, n);
-  if (!shReady[n]) {
-    rebake = true;
-    const t0 = performance.now();
-    await bakeShadowMaps(n ? tShN : tSh); shReady[n] = true;
-    if (QP.has('log')) console.log(`shadow rebake (${n ? 'night' : 'day'} sun) ${((performance.now() - t0) / 1000).toFixed(2)} s`);
-    rebake = false;
-  }
+  rebake = true;
+  const t0 = performance.now();
+  await bakeShadowMaps(tSh); // one shared set: every profile switch re-bakes for its sun
+  if (QP.has('log')) console.log(`shadow rebake (${n ? 'night' : 'day'} sun) ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+  rebake = false;
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true);
   shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true);
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true);
@@ -801,6 +967,7 @@ colUI(); winUI(); numUI(); streetUI(); ghostUI();
 // world was being built; when it answers, a usable fix moves the camera once (never blocks startup).
 lookAt(...POSES[0]);
 F[VX] = F[VY] = F[VZ] = 0;
+startStream(); // Phase B: fill the pool around the start camera, then follow it
 if (!AUTO) fixP.then((fix) => { // probes keep the deterministic pack viewpoint
   if (fix && !outside(fix.latitude, fix.longitude)) camOver(fix.latitude, fix.longitude, 'start camera');
   else if (QP.has('log')) console.log(`start camera: centre (${fix ? 'outside pack' : geoWhy})`);

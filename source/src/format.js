@@ -18,7 +18,8 @@ async function mpkTile(P, i) {
   let t = P.tiles.get(i);
   if (t) return t;
   const [x, z, off, len] = P.h.tiles[i];
-  const u8 = new Uint8Array(await mpkInflate(P.u8.subarray(off, off + len)));
+  const raw = P.read ? await P.read(off, len) : P.u8.subarray(off, off + len); // range source or embedded pack
+  const u8 = new Uint8Array(await mpkInflate(raw));
   const dv = new DataView(u8.buffer), rd = [];
   let p = 0;
   const u8v = () => dv.getUint8(p++), u32 = () => { const v = dv.getUint32(p, true); p += 4; return v; },
@@ -70,7 +71,8 @@ async function mpkTile(P, i) {
 // routing graph: { nx: Int32Array, nz, ea: Uint32Array, eb, ecls, eflags, ename, elanes, espeed, elen }
 async function mpkGraph(P) {
   if (!P.h.graph || P.graph) return P.graph;
-  const u8 = new Uint8Array(await mpkInflate(P.u8.subarray(P.h.graph.off, P.h.graph.off + P.h.graph.len)));
+  const g = P.h.graph, raw = P.read ? await P.read(g.off, g.len) : P.u8.subarray(g.off, g.off + g.len);
+  const u8 = new Uint8Array(await mpkInflate(raw));
   const dv = new DataView(u8.buffer);
   let p = 0; const u32 = () => { const v = dv.getUint32(p, true); p += 4; return v; }, i32 = () => { const v = dv.getInt32(p, true); p += 4; return v; }, u16 = () => { const v = dv.getUint16(p, true); p += 2; return v; };
   const nN = u32(), nx = new Int32Array(nN), nz = new Int32Array(nN);

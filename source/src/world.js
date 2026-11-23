@@ -12,16 +12,31 @@ const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
 // water line kinds → full width in metres (centrelines widened into ribbons; docs/mpk-format.md)
 const WW = { 8: 12, 9: 4, 10: 12 }; // keep in sync with pipeline/build-city.mjs WWIDTH
 
-async function buildWorld(PK) { // async: tiles and the graph inflate on demand
+async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate on demand
+  // Lazy mode: a cheap plan pass walks every tile with the mesh builder in counting mode, reserving
+  // exact type/instance/mesh slots; only the focus tiles are really meshed before the function
+  // returns, the rest are filled by fillNext() in the background. The full path (default) is
+  // unchanged, so every existing harness test still builds the entire world in one call.
+  let planning = false, slot = null, bundle = false; // slot: write cursors {t,i} when filling a reserved range
   const meshes = [], types = [], labels = [];
   const emptyMesh = () => new MB(1).build(); // zero-vertex far LOD: windows vanish before the far distance
-  let IB = new ArrayBuffer(48 << 14), IF = new Float32Array(IB), IU = new Uint32Array(IB), nI = 0;
+  // ctx is swappable: the main build owns one, a streaming pool bundles each tile into its own
+  const main = { meshes, types, IB: new ArrayBuffer(48 << 14), IF: null, IU: null, nI: 0 };
+  main.IF = new Float32Array(main.IB); main.IU = new Uint32Array(main.IB);
+  let ctx = main;
   // up to four LODs switched at d01, d12, d23, gone beyond dmax; thin > 0: distance where instances start thinning out
-  const type = (lods, kind, d01 = 1e9, d12 = 1e9, dmax = 1e9, thin = 0, flags = 0, d23 = 1e9) => { types.push({ lods: lods.map((m) => meshes.push(m) - 1), kind, d: [d01, d12, dmax, thin], d23, flags, n: 0 }); return types.length - 1; };
+  const type = (lods, kind, d01 = 1e9, d12 = 1e9, dmax = 1e9, thin = 0, flags = 0, d23 = 1e9) => {
+    if (slot) { // fill the reserved mesh object in place — slots, v0/i0 offsets and bind groups keep pointing at it
+      const id = slot.t++;
+      types[id].lods.forEach((mi, l) => { const src = lods[l], dst = meshes[mi]; dst.vb = src.vb; dst.ib = src.ib; dst.nv = src.nv; dst.ni = src.ni; dst.rad = src.rad; dst.pending = 0; });
+      return id;
+    }
+    ctx.types.push({ lods: lods.map((m) => ctx.meshes.push(m) - 1), kind, d: [d01, d12, dmax, thin], d23, flags, n: 0 }); return ctx.types.length - 1;
+  };
   const put = (ty, x, y, z, s = 1, q = Q0, tint = 0xffffffff, sy = 1) => {
-    if ((nI + 1) * 48 > IB.byteLength) { const n = new ArrayBuffer(IB.byteLength * 2); new Uint8Array(n).set(new Uint8Array(IB)); IB = n; IF = new Float32Array(n); IU = new Uint32Array(n); }
-    const o = nI++ * 12; IF[o] = x; IF[o + 1] = y; IF[o + 2] = z; IF[o + 3] = s; IF[o + 4] = q[0]; IF[o + 5] = q[1]; IF[o + 6] = q[2]; IF[o + 7] = q[3];
-    IU[o + 8] = tint; IU[o + 9] = ty; IF[o + 10] = types[ty].flags & ALWAYS ? 1e6 : meshes[types[ty].lods[0]].rad * s * max(1, sy); IF[o + 11] = sy; types[ty].n++;
+    if (!slot && (ctx.nI + 1) * 48 > ctx.IB.byteLength) { const n = new ArrayBuffer(ctx.IB.byteLength * 2); new Uint8Array(n).set(new Uint8Array(ctx.IB)); ctx.IB = n; ctx.IF = new Float32Array(n); ctx.IU = new Uint32Array(n); }
+    const o = (slot ? slot.i++ : ctx.nI++) * 12; ctx.IF[o] = x; ctx.IF[o + 1] = y; ctx.IF[o + 2] = z; ctx.IF[o + 3] = s; ctx.IF[o + 4] = q[0]; ctx.IF[o + 5] = q[1]; ctx.IF[o + 6] = q[2]; ctx.IF[o + 7] = q[3];
+    ctx.IU[o + 8] = tint; ctx.IU[o + 9] = ty; ctx.IF[o + 10] = ctx.types[ty].flags & ALWAYS ? 1e6 : (planning ? 512 : ctx.meshes[ctx.types[ty].lods[0]].rad) * s * max(1, sy); ctx.IF[o + 11] = sy; if (!slot) ctx.types[ty].n++;
   };
 
   // ground masks, 1 m/texel over +-1024 m: MAP all neutral, LANDMAP flat grass. Green layers darken the grass
@@ -63,12 +78,13 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const gx0 = tx0 * S - 200, gx1 = (tx1 + 1) * S + 200, gz0 = tz0 * S - 200, gz1 = (tz1 + 1) * S + 200;
 
   // ground: one flat plane (the pack frame is flat until terrain packs arrive), drawn last
-  {
+  const makeGround = () => {
     const mb = new MB(16); mb.mat = M.GROUND;
     mb.v(gx0, 0, gz0, 0, 1, 0); mb.v(gx1, 0, gz0, 0, 1, 0); mb.v(gx1, 0, gz1, 0, 1, 0); mb.v(gx0, 0, gz1, 0, 1, 0);
     mb.tri(0, 2, 1); mb.tri(0, 3, 2);
     put(type([mb.build()], K.SOLID, 1e9, 1e9, 1e9, 0, NO_NEAR | DRAW_LAST), 0, 0, 0);
-  }
+  };
+  makeGround();
 
   const bboxes = []; // building boxes for collision: [x0, z0, x1, z1, top] (outer box at full height)
   // roads and water lines: one continuous strip. Per-segment butt quads left wedge gaps at every
@@ -188,11 +204,21 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   // tile inflation is async (DecompressionStream), meshing is sync: inflate the next batch while
   // the current one is being generated, 24 streams at a time (980 sequential awaits cost ~0.45 s)
   const TB = 24;
-  const prefetch = (b) => Promise.all(PK.h.tiles.slice(b, b + TB).map((_, k) => mpkTile(PK, b + k)));
-  let incoming = prefetch(0);
-  for (let i = 0; i < PK.h.tiles.length; i++) {
-    if (i % TB === 0 && i) await incoming; // the batch we are about to mesh must be inflated
-    const T = await mpkTile(PK, i), lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S, th = S / 2, tcx = ox + th, tcz = oz + th;
+  const inflate = (inds) => Promise.all(inds.map((i) => mpkTile(PK, i)));
+  // inflate the next batch while the current one is meshed; works for the full build and the plan pass
+  const runTiles = async (inds, onTile) => {
+    let incoming = inflate(inds.slice(0, TB));
+    for (let k = 0; k < inds.length; k++) {
+      if (k % TB === 0 && k) await incoming;
+      const T = await mpkTile(PK, inds[k]);
+      onTile(k, inds[k], T);
+      if ((k + 1) % TB === 0 && k + 1 < inds.length) incoming = inflate(inds.slice(k + 1, k + 1 + TB));
+    }
+  };
+  // one tile's entire contribution, run in either mode: plan (dry, counts only, reserves slots)
+  // or fill (real geometry, writes into the reserved slots). `slot` selects the latter.
+  const tile = (i, T) => {
+    const lods = T.lods[T.lods.length - 1], ox = T.x * S, oz = T.z * S, th = S / 2, tcx = ox + th, tcz = oz + th;
     // building holes (layer kind 6, docs/mpk-format.md): group by parent osmId — the matching
     // relation-provenance buildings carve their roofs with them and wall the rings (courtyards)
     let holes = null;
@@ -200,7 +226,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
       if (!holes) holes = new Map();
       for (const r of L.recs) { const a = holes.get(r.osmId); if (a) a.push(r); else holes.set(r.osmId, [r]); }
     }
-    const city = cityTile(i, lods, ox, oz, S, bboxes, holes); // buildings into tint buckets + road centre lines
+    const city = cityTile(i, lods, ox, oz, S, slot || bundle ? [] : bboxes, holes); // buildings into tint buckets + road centre lines
     const mR = new MB(1 << 15), mF = new MB(1 << 12), mW = new MB(1 << 12), mG = new MB(1 << 12), mB = new MB(1 << 13);
     mB.mat = M.QUAY; // bridge concrete: deck slab sides, parapets, piers (baked per vertex)
     let nR = 0, nW = 0, nG = 0, nB = 0;
@@ -246,7 +272,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     }
     // labels: housenumbers ride on building records (header strings), street names on road records.
     // One anchor per record; dedupe() folds repeated way names into one label per world cell.
-    for (const L of lods) {
+    if (!slot && !bundle) for (const L of lods) {
       if (L.kind === 1) for (const b of L.recs) {
         if (!b.num) continue;
         const n = b.pts.length / 2; let ax = 0, az = 0;
@@ -298,7 +324,154 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz); // bridge concrete
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
-    if ((i + 1) % TB === 0 && i + 1 < PK.h.tiles.length) incoming = prefetch(i + 1);
+  };
+  const allInds = PK.h.tiles.map((_, i) => i);
+  let planTileData = null;
+  // Far shadow maps cover the whole city, but only a few tiles are meshed at startup. Build a coarse
+  // silhouette proxy from inflated tile records (plain prisms, no facades/windows): a few hundred
+  // thousand triangles, baked once into the far maps instead of leaving the horizon shadowless.
+  const buildShadowProxy = () => {
+    const mb = new MB(1 << 16); mb.mat = M.PLASTER;
+    const TILES = planTileData || PK.tiles, at = (i) => TILES.get ? TILES.get(i) : TILES[i];
+    for (let i = 0; i < PK.h.tiles.length; i++) {
+      const T = at(i); if (!T) continue;
+      const ox = PK.h.tiles[i][0] * S, oz = PK.h.tiles[i][1] * S;
+      for (const L of T.lods.flat()) if (L.kind === 1) for (const r of L.recs) {
+        const n = r.pts.length >> 1; if (n < 3) continue;
+        const base = r.base10 / 10, top = base + r.h10 / 10;
+        if (top - base < 0.5) continue;
+        const b0 = mb.nv;
+        for (let k = 0; k < n; k++) {
+          const j = (k + 1) % n, dx = r.pts[j * 2] - r.pts[k * 2], dz = r.pts[j * 2 + 1] - r.pts[k * 2 + 1], L2 = hypot(dx, dz) || 1;
+          mb.v(ox + r.pts[k * 2] / 100, base, oz + r.pts[k * 2 + 1] / 100, dz / L2, 0, -dx / L2);
+        }
+        for (let k = 0; k < n; k++) mb.v(ox + r.pts[k * 2] / 100, top, oz + r.pts[k * 2 + 1] / 100, 0, 1, 0);
+        for (let k = 0; k < n; k++) { const j = (k + 1) % n; mb.quad(b0 + k, b0 + j, b0 + n + j, b0 + n + k); }
+        for (let k = 1; k < n - 1; k++) mb.tri(b0 + n, b0 + n + k, b0 + n + k + 1);
+      }
+    }
+    return mb.build();
+  };
+  let fillNext = null, tilesFor = null, lazyRanges = null, focusOrder = null, filledCount = null, pool = null;
+  // dry walk over a set of tiles: exact slot ranges for every tile, plus all labels/boxes/maps
+  const planTiles = async (inds) => {
+    const tileData = new Array(PK.h.tiles.length), ranges = {};
+    planning = true; setMBDry(true);
+    await runTiles(inds, (k, i, T) => {
+      tileData[i] = T; ranges[i] = { t0: ctx.types.length, i0: ctx.nI };
+      tile(i, T);
+      ranges[i].t1 = ctx.types.length; ranges[i].i1 = ctx.nI;
+    });
+    setMBDry(false); planning = false; planTileData = tileData;
+    return { tileData, ranges };
+  };
+  const nearest = (inds, fx, fz) => inds.slice().sort((a, b) => {
+    const ta = PK.h.tiles[a], tb = PK.h.tiles[b];
+    return ((ta[0] * S + S / 2 - fx) ** 2 + (ta[1] * S + S / 2 - fz) ** 2)
+      - ((tb[0] * S + S / 2 - fx) ** 2 + (tb[1] * S + S / 2 - fz) ** 2);
+  });
+
+  if (opts.pool) {
+    // Streaming pool: budgets come from the plan pass (max tile in the pack + 5% slack), so every
+    // slot has the same fixed footprint. A tile is built into its own bundle and copied into a
+    // slot on load; unload blanks the instances (null type → cull emits nothing). No GPU buffer,
+    // bind group or cull pipeline is ever recreated as the camera moves.
+    const { tileData, ranges } = await planTiles(allInds);
+    const P = opts.pool, capT = 48, capI = 48;
+    let capV = 0, capX = 0, capM = 0;
+    for (const i of allInds) {
+      const r = ranges[i]; if (!r) continue;
+      let v = 0, x = 0, m = 0;
+      for (let t = r.t0; t < r.t1; t++) for (const mi of types[t].lods) { v += meshes[mi].nv; x += meshes[mi].ni; m++; }
+      capV = max(capV, ceil(v * 1.05)); capX = max(capX, ceil(x * 1.05)); capM = max(capM, m);
+    }
+    const dummyAt = P * capM, nullTy = P * capT, poolMeshes = [], poolTypes = [];
+    for (let s = 0; s < P; s++) {
+      for (let k = 0; k < capM; k++) poolMeshes.push({ vb: null, ib: null, nv: 0, ni: 0, v0: 0, i0: 0, rad: 0, pending: 1, slot: s });
+      for (let k = 0; k < capT; k++) poolTypes.push({ lods: [dummyAt, dummyAt, dummyAt, dummyAt], kind: K.SOLID, d: [1e9, 1e9, 1e9, 0], d23: 1e9, flags: 0, n: 1 });
+    }
+    poolMeshes.push(new MB(1).build()); // shared zero-vertex LOD for unfilled type slots
+    poolTypes.push({ lods: [], kind: K.SOLID, d: [1e9, 1e9, 1e9, 0], d23: 1e9, flags: 0, n: 0 }); // null type
+    const poolIB = new ArrayBuffer((P * capI + 1) * 48), poolIF = new Float32Array(poolIB), poolIU = new Uint32Array(poolIB);
+    const buildBundle = (i, T) => {
+      const prev = ctx, B = new ArrayBuffer(48 * 1024);
+      const out = { meshes: [], types: [], IB: B, IF: new Float32Array(B), IU: new Uint32Array(B), nI: 0 };
+      ctx = out; bundle = true; tile(i, T); bundle = false; ctx = prev;
+      return out;
+    };
+    const slotState = new Array(P).fill(-1);
+    const clearType = (t) => { t.lods = [dummyAt, dummyAt, dummyAt, dummyAt]; t.kind = K.SOLID; t.d = [1e9, 1e9, 1e9, 0]; t.flags = 0; t.n = 1; };
+    const load = (s, i) => {
+      const B = buildBundle(i, tileData[i]), sM = s * capM, sT = s * capT, sI = s * capI;
+      let vc = s * capV, xc = s * capX;
+      for (let k = 0; k < capT; k++) clearType(poolTypes[sT + k]);
+      const map = new Int32Array(B.meshes.length);
+      for (let k = 0; k < B.meshes.length; k++) {
+        const src = B.meshes[k], dst = poolMeshes[sM + k];
+        dst.vb = src.vb; dst.ib = src.ib; dst.nv = src.nv; dst.ni = src.ni; dst.rad = src.rad;
+        dst.v0 = vc; dst.i0 = xc; dst.pending = 0;
+        vc += src.nv; xc += src.ni; map[k] = sM + k;
+      }
+      for (let k = 0; k < B.types.length; k++) {
+        const src = B.types[k], dst = poolTypes[sT + k];
+        for (let l = 0; l < 4; l++) dst.lods[l] = l < src.lods.length ? map[src.lods[l]] : dummyAt;
+        dst.kind = src.kind; dst.d = src.d.slice(); dst.d23 = src.d23; dst.flags = src.flags; dst.n = src.n;
+      }
+      for (let k = 0; k < capI; k++) {
+        const o = (sI + k) * 12;
+        if (k < B.nI) {
+          poolIF.set(B.IF.subarray(k * 12, k * 12 + 12), o);
+          poolIU[o + 8] = B.IU[k * 12 + 8]; poolIU[o + 9] = sT + B.IU[k * 12 + 9];
+        } else { poolIF.fill(0, o, o + 12); poolIU[o + 8] = 0xffffffff; poolIU[o + 9] = nullTy; }
+      }
+      slotState[s] = i;
+      return { meshes: poolMeshes.slice(sM, sM + B.meshes.length), types: poolTypes.slice(sT, sT + B.types.length), i0: sI, i1: sI + capI, slot: s, t0: sT, m0: sM, tile: i };
+    };
+    const unload = (s) => {
+      const sM = s * capM, sT = s * capT, sI = s * capI;
+      for (let k = 0; k < capT; k++) clearType(poolTypes[sT + k]);
+      for (let k = 0; k < capI; k++) { const o = (sI + k) * 12; poolIF.fill(0, o, o + 12); poolIU[o + 8] = 0xffffffff; poolIU[o + 9] = nullTy; }
+      const ms = poolMeshes.slice(sM, sM + capM);
+      for (const m of ms) { m.vb = m.ib = null; m.nv = m.ni = 0; m.rad = 0; m.pending = 1; }
+      slotState[s] = -1;
+      return { meshes: ms, types: poolTypes.slice(sT, sT + capT), i0: sI, i1: sI + capI, slot: s, t0: sT, m0: sM, tile: -1 };
+    };
+    ctx = { meshes: poolMeshes, types: poolTypes, IB: poolIB, IF: poolIF, IU: poolIU, nI: P * capI };
+    makeGround(); // the pack plane lives in the pool context too, so it survives the swap
+    pool = { size: P, capT, capI, capM, capV, capX, meshes: poolMeshes, types: poolTypes,
+      inst: poolIB, nI: P * capI, nullTy, load, unload, nearest, slotState,
+      loaded: () => slotState.reduce((n, i) => n + (i >= 0 ? 1 : 0), 0) };
+  } else if (opts.lazy) {
+    const inds = opts.limit ? allInds.slice(0, opts.limit) : allInds;
+    const { tileData, ranges } = await planTiles(inds);
+    // nearest tiles first around the start camera (3x3 by default), in case fillNext has a budget
+    const [fx, fz] = opts.focus || [0, 0];
+    focusOrder = nearest(inds, fx, fz);
+    const done = new Set();
+    filledCount = () => done.size;
+    tilesFor = (i) => {
+      const r = ranges[i], out = []; if (!r) return out;
+      for (let t = r.t0; t < r.t1; t++) for (const mi of types[t].lods) out.push(meshes[mi]);
+      return out;
+    };
+    const fill = (i) => {
+      if (done.has(i) || !ranges[i]) return false;
+      const r = ranges[i]; slot = { t: r.t0, i: r.i0 };
+      tile(i, tileData[i]); slot = null; done.add(i); return true;
+    };
+    fillNext = (max = 8, budget = 4) => {
+      const out = [], t0 = performance.now();
+      for (const i of focusOrder) {
+        if (done.has(i)) continue;
+        if (fill(i)) out.push(i);
+        if (out.length >= max || performance.now() - t0 >= budget) break;
+      }
+      return out;
+    };
+    for (let k = 0, n = opts.count || 9; k < n && k < focusOrder.length; k++) fill(focusOrder[k]);
+    lazyRanges = ranges;
+  } else {
+    await runTiles(allInds, (k, i, T) => tile(i, T));
   }
 
   // routing graph, decoded once here (GPS walks it later); absent in country packs
@@ -306,6 +479,7 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
 
   const hard = { domes: [], halls: [], villas: [], shapes: [] }; // Atlantis shapes are gone; boxes rule now
   // type/put: the same closures, exposed so gps.js can add the vehicle marker after the build
-  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put,
-    labels: dedupe(labels), strings: PK.h.strings || [] };
+  return { meshes: ctx.meshes, types: ctx.types, inst: ctx.IB.slice(0, ctx.nI * 48), nI: ctx.nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put,
+    lazy: !!opts.lazy && !opts.pool, fillNext, tilesFor, ranges: lazyRanges, focusOrder, filledCount,
+    pool, nearest, tileSize: S, buildShadowProxy, labels: dedupe(labels), strings: PK.h.strings || [] };
 }
