@@ -502,6 +502,30 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
   // routing graph, decoded once here (GPS walks it later); absent in country packs
   PK.graph = await mpkGraph(PK);
 
+  // pedestrian crossings: OSM footways tagged crossing=* meet a road at a point in the header.
+  // Paint zebra bars there — one static mesh, at 0.095 m so it sits above both road and footway
+  // ribbons and never z-fights with them. Direction follows the road, bars span its width.
+  const CS = PK.h.crossings;
+  if (CS && CS.length) {
+    const mb = new MB(min(CS.length * 96, 1 << 17)); mb.mat = M.PLASTER;
+    for (const c of CS) {
+      if (!isFinite(c.x) || !isFinite(c.z) || !isFinite(c.a)) continue;
+      const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux, half = min((c.w || 8) / 2, 6.5);
+      // real zebra: wide bars, tight gaps, numbered like the painted crossing. Unmarked ones get
+      // a thinner, sparser pattern so the two kinds read differently at a glance.
+      const nBar = c.k === 2 ? 4 : 6, bw = c.k === 2 ? .4 : .8, gap = c.k === 2 ? 1.0 : .6;
+      for (let s = 0; s < nBar; s++) {
+        const o = (s - (nBar - 1) / 2) * (bw + gap), cx = c.x + ux * o, cz = c.z + uz * o;
+        const a = mb.v(cx - nx * half, 0.095, cz - nz * half, 0, 1, 0);
+        const b = mb.v(cx + nx * half, 0.095, cz + nz * half, 0, 1, 0);
+        const d = mb.v(cx + nx * half + ux * bw, 0.095, cz + nz * half + uz * bw, 0, 1, 0);
+        const e = mb.v(cx - nx * half + ux * bw, 0.095, cz - nz * half + uz * bw, 0, 1, 0);
+        mb.quad(a, b, d, e);
+      }
+    }
+    if (mb.ni) put(type([mb.build()], K.SOLID, 1e9, 1e9, 380, 0, 0), 0, 0, 0, 1, Q0, rgb(1, 1, 1));
+  }
+
   const hard = { domes: [], halls: [], villas: [], shapes: [] }; // Atlantis shapes are gone; boxes rule now
   // type/put: the same closures, exposed so gps.js can add the vehicle marker after the build
   return { meshes: ctx.meshes, types: ctx.types, inst: ctx.IB.slice(0, ctx.nI * 48), nI: ctx.nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put,

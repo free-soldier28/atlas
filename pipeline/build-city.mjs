@@ -14,6 +14,7 @@ import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
 import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
 import { makeDeck, buildingHitsDeck, redundantDeck } from './lib/bridge-conflicts.mjs';
 import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
+import { collectCrossings } from './lib/crossings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
 const readCache = (n) => JSON.parse(readFileSync(path.join(here, 'cache', `${n}.json`), 'utf8')).elements;
@@ -318,7 +319,7 @@ for (const el of roadsEls) {
   const rec = { cls, flags: (oneway === -1 ? 1 : oneway) | (t.bridge && t.bridge !== 'no' ? 2 : 0), name: t.name || undefined, lanes, w10: Math.round(width * 10) };
   ribbonLines.push({ pts, rec });
   stats.roadRecs++;
-  if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed });
+  if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed, width });
 }
 
 // mappers cut one road into many ways at every junction; two ways that merely continue each other
@@ -593,11 +594,24 @@ const poses = [
   [staX, 10, staZ, staB_X, 8, staB_Z],     // the railway station
 ];
 
+// ---------- pedestrian crossings ----------
+// OSM maps these as short footways tagged crossing=*. Where such a way actually crosses a
+// drivable road, keep the point + road heading in the header; the renderer paints zebra bars.
+const crossingWays = [];
+for (const el of roadsEls) {
+  if (el.type !== 'way' || !el.tags?.crossing || !el.geometry) continue;
+  const pts = linePts(el.geometry);
+  if (pts && pts.length >= 4) crossingWays.push({ pts, crossing: el.tags.crossing });
+}
+const crossings = collectCrossings(crossingWays, drivableWays);
+stats.crossings = crossings.length;
+
 // ---------- emit ----------
 const tileList = [...tiles.values()].sort((a, b) => a.tx - b.tx || a.tz - b.tz);
 let stringsCount = 0;
 const emitPack = () => {
 const B = new MPKBuilder({ id: ID, name: NAME, origin: ORIGIN, tileSize: S, bbox: BBOX, poses, fly: null, terrain: null });
+B.h.crossings = crossings;
 for (const t of tileList) {
   const layers = [];
   if (t.b.length) layers.push({ kind: 1, recs: t.b });
@@ -650,6 +664,7 @@ console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${
 // ---------- pack QA: every shipped defect class is a gate here — a new city fails its build ----------
 console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
 console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridgesAuto} auto-flagged over water`);
+console.log(`build: pedestrian crossings ${stats.crossings} painted from tagged footways`);
 console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings, elevated ${stats.waterRoadsElevated} roads, clipped ${stats.waterRoadsClipped} roads into ${stats.waterRunsKept} dry runs`);
 {
   const { qa } = await import('./qa.mjs');
