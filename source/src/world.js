@@ -14,6 +14,7 @@ const WW = { 8: 55, 9: 4, 10: 15 };
 
 async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const meshes = [], types = [];
+  const emptyMesh = () => new MB(1).build(); // zero-vertex far LOD: windows vanish before the far distance
   let IB = new ArrayBuffer(48 << 14), IF = new Float32Array(IB), IU = new Uint32Array(IB), nI = 0;
   // up to four LODs switched at d01, d12, d23, gone beyond dmax; thin > 0: distance where instances start thinning out
   const type = (lods, kind, d01 = 1e9, d12 = 1e9, dmax = 1e9, thin = 0, flags = 0, d23 = 1e9) => { types.push({ lods: lods.map((m) => meshes.push(m) - 1), kind, d: [d01, d12, dmax, thin], d23, flags, n: 0 }); return types.length - 1; };
@@ -243,6 +244,13 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
     for (const w of city.walls.values()) {
       const f = w.f.build(), mM = w.m.ni ? w.m.build() : f, mN = w.n.build();
       put(type([mN, mM, f], K.SOLID, BLOD0, BLOD1, 1e9), tcx, 0, tcz, 1, Q0, w.t);
+      // windows, bays and the door live in their own kind: the settings toggle gates their draw
+      // without rebuilding the world; no shadow maps (pane insets are far too small to matter)
+      if (w.wn.ni || w.wm.ni) {
+        // every slot must be a distinct object: the GPU upload consumes each mesh buffer once
+        const wN = w.wn.build(), wM = w.wm.build();
+        put(type([wN, wM, emptyMesh()], K.GLASS, BLOD0, BLOD1, 1e9, 0, NO_NEAR | NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, w.t);
+      }
     }
     for (const r of city.roofs.values()) {
       const f = r.f.build(), mN = r.n.ni ? r.n.build() : f;

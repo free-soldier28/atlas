@@ -79,6 +79,10 @@ const TANH = tan(30 * DEG), NEAR = 0.3, EXPO = 0.8, EXPO_N = 0.55;
 // light profile: 0 golden-hour day, 1 night. ?night=1|0 forces one (headless tests); else the stored choice, day default
 let night = 0;
 try { const nq = QP.get('night'); night = nq !== null ? +(nq === '1') : AUTO ? 0 : +(localStorage.atlasNight === '1'); } catch {}
+// windows, window bays and doors: hidden by default (the facade reads cleaner); ?win=1|0 forces
+// one for headless probes, otherwise the saved drawer choice. Toggling only gates K.GLASS draws.
+let windows = 0;
+try { const wq = QP.get('win'); windows = wq !== null ? +(wq === '1') : AUTO ? 0 : +(localStorage.atlasWin === '1'); } catch {}
 // sun at the ground: atmospheric transmittance x 1.35 (keeps sunlit paving warm rather than grey); night: the moon.
 // Strict physics (the task brief's 1/4e4) renders black under AgX at the night exposure, so the moon carries
 // ~1/200 of the sun (MOONGROUND) and the night sky table is lifted to a visible dark blue (MOONSKY) — art-directed.
@@ -205,7 +209,7 @@ const listOf = (kind, skip = 0, need = 0) => new Uint32Array(slots.map((s, i) =>
 // one entry per kind the world registers, indexed by the world's kind constants (world.js). gnd: the ground,
 // drawn last so covered pixels are never shaded; near / cast: camera cascade and baked maps
 const LS = [];
-for (const k of [K.SOLID, K.WATER]) LS[k] = { all: listOf(k, DRAW_LAST), gnd: listOf(k, 0, DRAW_LAST), near: listOf(k, NO_NEAR | NO_SHADOW), cast: listOf(k, NO_SHADOW | NO_BAKE) };
+for (const k of [K.SOLID, K.WATER, K.GLASS]) LS[k] = { all: listOf(k, DRAW_LAST), gnd: listOf(k, 0, DRAW_LAST), near: listOf(k, NO_NEAR | NO_SHADOW), cast: listOf(k, NO_SHADOW | NO_BAKE) };
 const tMap = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 const tLand = tex(MAPPX, MAPPX, 'rgba8unorm', RT | TU.COPY_DST, { mips: 5 });
 // ground maps are painted at 1 m/texel; Low uploads them at half size (mean of four)
@@ -509,7 +513,9 @@ function render() {
   // main view G-buffer: buildings first, the ground they hide last
   r = e.beginRenderPass(passG); r.setBindGroup(0, bgScene[V_MAIN]); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
   r.setPipeline(pG); drawList(r, V_MAIN, LS[K.SOLID].all);
-  r.setPipeline(pG); drawList(r, V_MAIN, LS[K.SOLID].gnd); r.end();
+  r.setPipeline(pG); drawList(r, V_MAIN, LS[K.SOLID].gnd);
+  if (windows) { r.setPipeline(pG); drawList(r, V_MAIN, LS[K.GLASS].all); } // off by default
+  r.end();
   if (SSAO) { r = e.beginRenderPass(passAO); r.setPipeline(pAO); r.setBindGroup(0, bgAO); r.draw(3); r.end(); }
   r = e.beginRenderPass(passLight); r.setPipeline(pLight); r.setBindGroup(0, bgLight); r.draw(3); r.end();
   // water refracts and reflects the lit scene: it reads copies of the picture and depth so far
@@ -616,6 +622,10 @@ const key = (e, v) => {
 const setHud = (v) => { hud = v; tsOn = hud && hasTS; info.textContent = ''; const b = $('hs'); if (b) b.className = v ? 'on' : ''; const r = $('hb'); if (r) { r.textContent = v ? 'On' : 'Off'; r.className = v ? 'on' : ''; } };
 // collision toggle, from the C key and the drawer row
 const colUI = () => { const r = $('cb'); if (r) { r.textContent = solid ? 'On' : 'Off'; r.className = solid ? 'on' : ''; } };
+// windows + bays + doors toggle, from the drawer row; gates K.GLASS draws, never rebuilds the world
+const winUI = () => { const r = $('wi'); if (r) { r.textContent = windows ? 'On' : 'Off'; r.className = windows ? 'on' : ''; } };
+const setWindows = (v) => { windows = v === undefined ? 1 - windows : +!!v; if (!AUTO) { try { localStorage.atlasWin = windows ? '1' : '0'; } catch {} } winUI(); return windows; };
+window.__windows = setWindows; // headless probes / tests
 
 // the settings drawer: Esc or ⚙ toggles, a click outside closes it; the scene keeps running behind it
 let open = false;
@@ -639,6 +649,7 @@ $('st').onclick = () => setDrawer(!open);
 $('hs').onclick = () => setHud(!hud);
 $('hb').onclick = () => setHud(!hud);
 $('cb').onclick = () => { solid = !solid; colUI(); };
+if ($('wi')) $('wi').onclick = () => setWindows();
 $('nt').onclick = () => setNight(1 - night);
 $('lc').onclick = () => locate();
 $('ct').onclick = () => { setDrawer(true); const ci = $('ci'); if (!ci.hidden) ci.scrollIntoView({ block: 'nearest' }); };
@@ -712,7 +723,7 @@ dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
 dnB[night ? 1 : 0].className = 'on';
 const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night ? 'Day (N)' : 'Night (N)'; // the stack glyph mirrors the profile
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
-colUI();
+colUI(); winUI();
 
 // start camera: above the user's position when geolocation answers within its 4 s budget (a fix far outside
 // the pack counts as no fix), else the pack's first viewpoint. Placement only — no follow camera, no marker.

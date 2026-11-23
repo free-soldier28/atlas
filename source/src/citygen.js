@@ -183,7 +183,7 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   if (r.bkind === 4 && h >= 5.5) wi = 9;
   const house = r.bkind !== 3 && r.bkind !== 4 && r.bkind !== 6;
   const wt = WPAL[wi], rt = RPAL[house ? (rj2 < .42 ? 2 : rj2 < .58 ? 3 : rj2 < .8 ? 1 : 0) : (rj2 < .55 ? 1 : rj2 < .78 ? 0 : rj2 < .9 ? 3 : 2)];
-  const wb = wallB(wt), rb = roofB(rt);
+  const wb = wallB(wt), rb = roofB(rt), wn = wb.wn, wm = wb.wm;
   const F = [];
   for (let i = 0; i < n; i++) { const j = (i + 1) % n, f = fWall(X[i], Z[i], X[j], Z[j]); if (f) { f.y0 = base; F.push(f); } }
   // courtyard wall frames (hole rings CW → normals face into the void); pane seeds continue after
@@ -215,9 +215,9 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   for (const f of F2) for (let k = 1; k < storeys; k++) { const y = base + ground + (k - 1) * upper; wquad(m, f, 0, f.L, y - 0.09, y + 0.09, 0.03, 0.8); }
   if (winOK) {
     for (let fi = 0; fi < F.length; fi++) for (let si = 0; si < storeys; si++)
-      panes(F[fi], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(m, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
+      panes(F[fi], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(wm, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
     for (let k = 0; k < HF.length; k++) for (let si = 0; si < storeys; si++)
-      panes(HF[k], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(m, HF[k], u0, u1, v0, v1, 0.015, ecOf(iT, iB, F.length + k, si, pi)));
+      panes(HF[k], si, base, ground, upper, pitchM, (u0, u1, v0, v1, pi) => pane(wm, HF[k], u0, u1, v0, v1, 0.015, ecOf(iT, iB, F.length + k, si, pi)));
   }
 
   // near: facade — walls, bands, bays on the long walls (strips on small ones), door, cornice, parapet
@@ -229,12 +229,12 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
   for (const f of HF2) for (let k = 1; k < storeysN; k++) { const y = base + groundN + (k - 1) * upperN; wquad(b, f, 0, f.L, y - 0.09, y + 0.09, 0.03, 0.8); }
   const doorSlot = (max(1, round((doorF.L - 1.8) / pitchN)) - 1) >> 1;
   if (winOK && !bays && area < 45) for (let fi = 0; fi < F.length; fi++) for (let si = 0; si < storeysN; si++)
-    panes(F[fi], si, base, groundN, upperN, pitchN, (u0, u1, v0, v1, pi) => pane(b, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
+    panes(F[fi], si, base, groundN, upperN, pitchN, (u0, u1, v0, v1, pi) => pane(wn, F[fi], u0, u1, v0, v1, 0.015, ecOf(iT, iB, fi, si, pi)));
   else if (bays) for (const f of F2) for (let si = 0; si < storeysN; si++)
-    panes(f, si, base, groundN, upperN, pitchN, (u0, u1, v0, v1, pi) => { if (f === doorF && si === 0 && pi === doorSlot) return; bay(b, f, u0, u1, v0, v1, ecOf(iT, iB, F.indexOf(f), si, pi)); });
+    panes(f, si, base, groundN, upperN, pitchN, (u0, u1, v0, v1, pi) => { if (f === doorF && si === 0 && pi === doorSlot) return; bay(wn, f, u0, u1, v0, v1, ecOf(iT, iB, F.indexOf(f), si, pi)); });
   // door: dark stone frame, glazed slab behind (plain dark glass, no room)
   const dcx = doorF.L / 2, dw = min(1.2, doorF.L * 0.3), dh = min(2.35, groundN * 0.6);
-  bay(b, doorF, dcx - dw / 2, dcx + dw / 2, base, base + dh, 0);
+  bay(wn, doorF, dcx - dw / 2, dcx + dw / 2, base, base + dh, 0);
   // roofline: the cornice is a FLUSH painted band (darker ao, no protrusion) and the flat roof's
   // parapet is a 10 cm flush lip on EVERY face. The old protruding cornice (12 cm) over a recessed
   // parapet face (6 cm, two longest walls only) self-shadowed into a heavy dark band at the
@@ -287,7 +287,10 @@ function cityTile(iT, lods, ox, oz, S, bboxes, holes) {
   const h = S / 2, cx = ox + h, cz = oz + h;
   const walls = new Map(), roofs = new Map();
   let dash = null;
-  const wallB = (t) => { let b = walls.get(t); if (!b) walls.set(t, b = { t, n: new MB(1 << 11), m: new MB(1 << 11), f: new MB(1 << 10) }); return b; };
+  // wn / wm: near / mid window panes, bays and the door — a separate mesh per tint bucket so the
+  // settings toggle can hide them at runtime (and a pane's M.WINDOW material can never leak into
+  // the wall/cornice mesh that follows it)
+  const wallB = (t) => { let b = walls.get(t); if (!b) walls.set(t, b = { t, n: new MB(1 << 11), m: new MB(1 << 11), f: new MB(1 << 10), wn: new MB(1 << 11), wm: new MB(1 << 11) }); return b; };
   const roofB = (t) => { let b = roofs.get(t); if (!b) roofs.set(t, b = { t, n: new MB(1 << 10), f: new MB(1 << 9) }); return b; };
   for (const L of lods) {
     if (L.kind === 1) for (let iB = 0; iB < L.recs.length; iB++) {
