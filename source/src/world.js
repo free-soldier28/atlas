@@ -260,7 +260,12 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         const mb = r.cls <= 7 ? mR : mF;
         mb.mat = r.cls <= 7 ? M.ASPHALT : M.PAVE;
         const bridge = !!(r.flags & 2) && r.ys;
-        ribbon(mb, r.pts, hw, -th, -th, bridge ? r.ys.map((v) => v / 100) : 0.06);
+        // Coplanar ribbons z-fight wherever a footway crosses a road (or two ways of the same
+        // class meet). Lift walkable classes above the carriageway like a real kerb, and give
+        // each record a deterministic <1 cm tie-breaker so same-class crossings don't shimmer.
+        const yFlat = (r.cls <= 7 ? 0.06 : r.cls <= 9 ? 0.08 : 0.09)
+          + (Math.abs(r.pts[0] * 7 + r.pts[1] * 13) % 9) * 0.0012;
+        ribbon(mb, r.pts, hw, -th, -th, bridge ? r.ys.map((v) => v / 100) : yFlat);
         if (bridge) { bridgeDeck(mB, r.pts, hw, -th, -th, r.ys); nB++; }
         for (let k = 0; k + 3 < r.pts.length; k += 2) {
           // the ground MAP reads as asphalt where the road lies on it; elevated deck segments

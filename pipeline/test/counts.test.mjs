@@ -37,8 +37,9 @@ test('buildings: pack records == closed building ways + relation outer rings (ho
   console.log(`counts: closed building ways ${closed.length}, relation outer rings ${rel}` +
     ` (open ways ${open.length} arrive via relations; holes dropped ${holes}, open outer skipped ${openOuter})` +
     ` → expected ${closed.length + rel}, pack has ${packB}`);
-  // the water-mask filter drops a handful of houses drawn inside rivers (recorded in cache stats)
-  const dropped = JSON.parse(readFileSync(new URL("../cache/grodno-stats.json", import.meta.url), "utf8")).waterBuildingsDropped || 0;
+  const stats = JSON.parse(readFileSync(new URL("../cache/grodno-stats.json", import.meta.url), "utf8"));
+  // the water-mask filter drops houses inside rivers; the bridge audit drops houses a deck crosses
+  const dropped = (stats.waterBuildingsDropped || 0) + (stats.deckBuildingsDropped || 0);
   assert.equal(packB, closed.length + rel - dropped);
   assert.ok(closed.length > 30000, 'closed way count far below the measured Overpass total');
 });
