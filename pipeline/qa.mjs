@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
-import { crossesWater } from './lib/bridge.mjs';
+import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const M2 = 2000; // the clip margin build-city applies (bbox + 2 km)
@@ -30,14 +30,14 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   const S = P.h.tileSize, [lat0, lon0] = P.h.origin, K = Math.cos(lat0 * Math.PI / 180) * 111320;
   const bxlo = (P.h.bbox[1] - lon0) * K - M2, bxhi = (P.h.bbox[3] - lon0) * K + M2;
   const bzlo = -(P.h.bbox[2] - lat0) * 111320 - M2, bzhi = -(P.h.bbox[0] - lat0) * 111320 + M2;
-  const W = { waters: [], blds: [], roads: [] }; // per-tile record lists (tile-local metres)
+  const W = { waters: [], lines: [], blds: [], roads: [] }; // per-tile record lists (tile-local metres)
 
   // ---------- data checks ----------
   for (let i = 0; i < P.h.tiles.length; i++) {
     const T = await E.mpkTile(P, i), lods = T.lods[T.lods.length - 1];
-    const ox = T.x * S, oz = T.z * S, recs = { w: [], b: [], r: [] };
+    const ox = T.x * S, oz = T.z * S, recs = { w: [], wl: [], b: [], r: [] };
     for (const L of lods) {
-      if (L.kind === 3) for (const r of L.recs) if (r.kind <= 3) recs.w.push({ kind: r.kind, pts: r.pts });
+      if (L.kind === 3) for (const r of L.recs) { if (r.kind <= 3) recs.w.push({ kind: r.kind, pts: r.pts }); else if (r.kind >= 8) recs.wl.push({ kind: r.kind, pts: r.pts }); }
       else if (L.kind === 1) for (const r of L.recs) recs.b.push(r);
       else if (L.kind === 2) for (const r of L.recs) recs.r.push(r);
       else if (L.kind === 4) { /* green rings: closed-ring check below via recs.w-like path */ }
@@ -59,34 +59,35 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
       if (base < 0 || base > 10) errors.push({ check: 'heights', msg: `building base ${base} m outside the clamp (tile ${i}, osm ${b.osmId})` });
     }
     W.waters.push(...recs.w.map((w) => ({ pts: w.pts, ox, oz, tile: i })));
+    W.lines.push(...recs.wl.map((w) => ({ pts: w.pts, hw: ({ 8: 12, 9: 4, 10: 12 })[w.kind] / 2, ox, oz, tile: i })));
     W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId })));
     W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, flags: r.flags, ys: r.ys })));
   }
   stats.tiles = P.h.tiles.length;
 
-  // water polys containing buildings: a riverbank-style area polygon over houses
-  const inRing = (x, z, pts) => {
-    let inside = false;
-    for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
-      const zi = pts[i + 1], zj = pts[j + 1];
-      if ((zi > z) !== (zj > z) && x < (pts[j] - pts[i]) * (z - zi) / (zj - zi) + pts[i]) inside = !inside;
-    }
-    return inside;
-  };
+  // full water mask: accurate polygons + widened river/stream ribbons, checked in WORLD
+  // coordinates (a polygon in one tile can cover a house in another). The pipeline drops or
+  // elevates conflicts before packing; QA fails any pack that still ships one.
   const area = (pts) => { let a = 0; for (let i = 0; i < pts.length; i += 2) { const j = (i + 2) % pts.length; a += pts[i] * pts[j + 1] - pts[j] * pts[i + 1]; } return Math.abs(a / 2); };
-  for (const w of W.waters) {
-    if (area(w.pts) < 400) continue; // small ponds: a shed on the bank is data noise
-    const g = w.pts.map((v, k) => (k % 2 ? w.oz : w.ox) + v / 100);
-    let nB = 0, hit = null;
-    for (const b of W.blds) {
-      if (Math.abs(b.ox - w.ox) > 1 || Math.abs(b.oz - w.oz) > 1) continue; // same tile frame
-      const n = b.pts.length / 2;
-      const cx = b.ox + b.pts.reduce((s, v, k) => s + (k % 2 ? 0 : v), 0) / n / 100;
-      const cz = b.oz + b.pts.reduce((s, v, k) => s + (k % 2 ? v : 0), 0) / n / 100;
-      if (inRing(cx - w.ox, cz - w.oz, w.pts) && inRing(b.pts[0] / 100, b.pts[1] / 100, w.pts)) { nB++; hit = hit || b; }
-    }
-    if (nB) errors.push({ check: 'waterOverlap', msg: `water poly ${(area(w.pts) | 0)} m² (tile ${w.tile}) contains ${nB} building(s), e.g. osm ${hit.osmId}` });
+  const toWorld = (r) => Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
+  const mask = makeMask(
+    W.waters.map((w) => ({ pts: toWorld(w), area: area(w.pts) / 1e4 })),
+    W.lines.map((l) => ({ pts: toWorld(l), hw: l.hw })));
+  let wetBuildings = 0, wetRoads = 0; const wetSamples = [], wetFix = [];
+  for (const b of W.blds) {
+    if (submerged(mask, toWorld(b)) >= 0.6) { wetBuildings++; if (wetSamples.length < 4) wetSamples.push('building ' + b.osmId); }
   }
+  for (const r of W.roads) {
+    if (r.flags & 2) continue; // an elevated bridge deck over water is correct
+    const g = toWorld(r);
+    if (g.some((_, k) => k % 2 === 0 && inWater(mask, g[k], g[k + 1], -0.5))) {
+      wetRoads++; if (wetSamples.length < 4) wetSamples.push('road tile ' + r.tile);
+      wetFix.push({ tile: r.tile, x: g[0], z: g[1] });
+    }
+  }
+  if (wetBuildings || wetRoads) errors.push({ check: 'waterOverlap',
+    msg: `${wetBuildings} building(s) and ${wetRoads} road(s) still lie in water: ${wetSamples.join(' | ')}`, fix: wetFix });
+  stats.wetBuildings = wetBuildings; stats.wetRoads = wetRoads;
 
   // bridges: any road over big water must carry flags bit1 with sane deck heights (the "road lies
   // in the water" defect class). build-city tags crossings itself — here the pack just gets failed
@@ -97,12 +98,16 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     if (r.flags & 2) {
       nBridges++;
       if (!r.ys || r.ys.length !== r.pts.length / 2) errors.push({ check: 'bridges', msg: `bridge record without per-vertex deck heights (tile ${r.tile})` });
-      else if (Math.max(...r.ys) < 120) errors.push({ check: 'bridges', msg: `bridge deck peaks at ${(Math.max(...r.ys) / 100).toFixed(1)} m — too low for a water crossing (tile ${r.tile})` });
+      else if (Math.max(...r.ys) < 120) errors.push({ check: 'bridges',
+        msg: `bridge deck peaks at ${(Math.max(...r.ys) / 100).toFixed(1)} m — too low for a water crossing (tile ${r.tile})`,
+        fix: [{ tile: r.tile, x: (r.ox + r.pts[0] / 100), z: (r.oz + r.pts[1] / 100) }] });
       else if (Math.min(...r.ys) < 0) errors.push({ check: 'bridges', msg: `negative deck height in ys (tile ${r.tile})` });
       continue;
     }
     const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
-    if (bigWater.length && crossesWater(g, bigWater)) errors.push({ check: 'bridges', msg: `road crosses big water without a bridge flag (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)})` });
+    if (crossesBig(mask, g, 0.5)) errors.push({ check: 'bridges',
+      msg: `road crosses big water without a bridge flag (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)})`,
+      fix: [{ tile: r.tile, x: g[0], z: g[1] }] });
   }
   stats.bridges = nBridges;
 

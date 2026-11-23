@@ -10,7 +10,7 @@ const Q0 = [0, 0, 0, 1];
 // road class → full width in metres when the record's w10 is 0 (docs/mpk-format.md)
 const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
 // water line kinds → full width in metres (centrelines widened into ribbons; docs/mpk-format.md)
-const WW = { 8: 55, 9: 4, 10: 15 };
+const WW = { 8: 12, 9: 4, 10: 12 }; // keep in sync with pipeline/build-city.mjs WWIDTH
 
 async function buildWorld(PK) { // async: tiles and the graph inflate on demand
   const meshes = [], types = [], labels = [];

@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { engine, openPack } from '../lib/worldharness.mjs';
 
-const WW = { 8: 55, 9: 4, 10: 15 };  // water line widths, metres (world.js WW)
+const WW = { 8: 12, 9: 4, 10: 12 };  // water line widths, metres (world.js WW)
 const CLIP = 2000;                   // pipeline clips content to bbox ± 2 km (build-city.mjs)
 const MARGIN = 50;                   // frame margin on top of the reachable extent
 const DRAW_LAST = 32;                // world.js instance flag (ground plane draws last)

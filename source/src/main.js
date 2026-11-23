@@ -90,6 +90,10 @@ try { const nq = QP.get('num'), sq = QP.get('street');
   showNum = nq !== null ? +(nq === '1') : AUTO ? 1 : localStorage.atlasNum !== '0';
   showStreet = sq !== null ? +(sq === '1') : AUTO ? 1 : localStorage.atlasStreet !== '0';
 } catch {}
+// debug: walk through buildings while keeping ground/water collision. ?ghost=1|0, drawer row.
+let ghost = 0;
+try { const gq = QP.get('ghost'); ghost = gq !== null ? +(gq === '1') : AUTO ? 0 : +(localStorage.atlasGhost === '1'); } catch {}
+setBoxCollision(!ghost);
 // sun at the ground: atmospheric transmittance x 1.35 (keeps sunlit paving warm rather than grey); night: the moon.
 // Strict physics (the task brief's 1/4e4) renders black under AgX at the night exposure, so the moon carries
 // ~1/200 of the sun (MOONGROUND) and the night sky table is lifted to a visible dark blue (MOONSKY) — art-directed.
@@ -685,6 +689,10 @@ const setNum = (v) => { showNum = v === undefined ? 1 - showNum : +!!v; if (!AUT
 const setStreet = (v) => { showStreet = v === undefined ? 1 - showStreet : +!!v; if (!AUTO) { try { localStorage.atlasStreet = showStreet ? '1' : '0'; } catch {} } streetUI(); return showStreet; };
 window.__numbers = setNum;
 window.__streets = setStreet;
+// buildings-only collision toggle (the Collision button still gates all collision)
+const ghostUI = () => { const r = $('gw'); if (r) { r.textContent = ghost ? 'On' : 'Off'; r.className = ghost ? 'on' : ''; } };
+const setGhost = (v) => { ghost = v === undefined ? 1 - ghost : +!!v; setBoxCollision(!ghost); if (!AUTO) { try { localStorage.atlasGhost = ghost ? '1' : '0'; } catch {} } ghostUI(); return ghost; };
+window.__ghost = setGhost;
 
 // the settings drawer: Esc or ⚙ toggles, a click outside closes it; the scene keeps running behind it
 let open = false;
@@ -711,6 +719,7 @@ $('cb').onclick = () => { solid = !solid; colUI(); };
 if ($('wi')) $('wi').onclick = () => setWindows();
 if ($('ln')) $('ln').onclick = () => setNum();
 if ($('ls')) $('ls').onclick = () => setStreet();
+if ($('gw')) $('gw').onclick = () => setGhost();
 $('nt').onclick = () => setNight(1 - night);
 $('lc').onclick = () => locate();
 $('ct').onclick = () => { setDrawer(true); const ci = $('ci'); if (!ci.hidden) ci.scrollIntoView({ block: 'nearest' }); };
@@ -786,7 +795,7 @@ dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
 dnB[night ? 1 : 0].className = 'on';
 const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night ? 'Day (N)' : 'Night (N)'; // the stack glyph mirrors the profile
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
-colUI(); winUI(); numUI(); streetUI();
+colUI(); winUI(); numUI(); streetUI(); ghostUI();
 
 // start camera: the pack's first viewpoint immediately. The geolocation request started while the
 // world was being built; when it answers, a usable fix moves the camera once (never blocks startup).

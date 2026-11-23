@@ -2,6 +2,7 @@
 // outer rings are the documented v1 delta, holes logged) and ≥95% of all highway ways.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { openPack, readCache } from './helpers.mjs';
 
 const isClosed = (g) => g && g.length >= 4 && g[0].lat === g[g.length - 1].lat && g[0].lon === g[g.length - 1].lon;
@@ -36,7 +37,9 @@ test('buildings: pack records == closed building ways + relation outer rings (ho
   console.log(`counts: closed building ways ${closed.length}, relation outer rings ${rel}` +
     ` (open ways ${open.length} arrive via relations; holes dropped ${holes}, open outer skipped ${openOuter})` +
     ` → expected ${closed.length + rel}, pack has ${packB}`);
-  assert.equal(packB, closed.length + rel);
+  // the water-mask filter drops a handful of houses drawn inside rivers (recorded in cache stats)
+  const dropped = JSON.parse(readFileSync(new URL("../cache/grodno-stats.json", import.meta.url), "utf8")).waterBuildingsDropped || 0;
+  assert.equal(packB, closed.length + rel - dropped);
   assert.ok(closed.length > 30000, 'closed way count far below the measured Overpass total');
 });
 

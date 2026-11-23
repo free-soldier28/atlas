@@ -7,14 +7,16 @@ let landY = null; // set by main.js once the world is built (0: the pack frame i
 // building boxes from world.js: [x0, z0, x1, z1, top] flat. `setHard` kept for the old API; the Atlantis
 // dome/hall/villa shape lists are gone — the boxes carry everything.
 let BX = null;
+let boxesOn = true; // debug toggle: walk through buildings while ground/water collision stays active
 function setHard(h) { }
 function setBoxes(b) { BX = b; }
+function setBoxCollision(on) { boxesOn = !!on; }
 // floor under (x, z): the highest box the point is inside, else flat ground. y0 decides nothing yet (v0 has no
 // under-roof space), a point above a roof still lands on it.
 function surfaceAt(x, z, y0) {
   COL[1] = 1e9; COL[2] = 1;
   let f = 0;
-  if (BX) for (let i = 0; i < BX.length; i += 5) if (x > BX[i] && x < BX[i + 2] && z > BX[i + 1] && z < BX[i + 3] && BX[i + 4] > f) { f = BX[i + 4]; COL[2] = 0; }
+  if (BX && boxesOn) for (let i = 0; i < BX.length; i += 5) if (x > BX[i] && x < BX[i + 2] && z > BX[i + 1] && z < BX[i + 3] && BX[i + 4] > f) { f = BX[i + 4]; COL[2] = 0; }
   COL[0] = f + CLEAR;
 }
 // move the camera from (px, py, pz) towards F[CX..CZ] (velocity F[VX..VZ]), correcting both in place. Natural ground

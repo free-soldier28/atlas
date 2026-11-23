@@ -7,11 +7,12 @@
 //  - water: no width stored (renderer decides); graph: drivable classes 0..6 only
 //    (service roads render but do not route).
 // Node usage: node pipeline/build-city.mjs
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
 import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
+import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
 const readCache = (n) => JSON.parse(readFileSync(path.join(here, 'cache', `${n}.json`), 'utf8')).elements;
@@ -92,7 +93,8 @@ const drivable = (cls) => cls <= 6; // service (7) and up render but do not rout
 
 // water: polyline (centreline) kinds — 8/9/10 live above the polygon table 0..3 so the renderer
 // can tell a river centreline from a riverbank polygon (docs/mpk-format.md)
-const WLINE = { river: 8, stream: 9, canal: 10 };
+const WLINE = { river: 8, stream: 9, canal: 10 }; // kind codes (not widths)
+const WWIDTH = { 8: 12, 9: 4, 10: 12 }; // conservative: OSM rivers here have no width tag; real banks come from polygons // full widths in m, must match source/src/world.js
 const waterPolyKind = (t) => {
   const w = (t.water || '').toLowerCase();
   if (w === 'river') return 0;
@@ -389,6 +391,8 @@ stats.graphEdges = edges.length;
 
 // ---------- water ----------
 const waterPolys = []; // { pts, area (m², signed) } — bridge detection reads these before roads assign
+const waterLines = []; // { pts, hw } — widened centreline ribbons (the other half of the water mask)
+const maskPolys = [], maskLines = []; // same water, converted to WORLD metres for the object filter
 for (const el of waterEls) {
   const t = el.tags || {};
   if (el.type === 'way' && el.geometry) {
@@ -401,13 +405,15 @@ for (const el of waterEls) {
       for (const ring of rings) {
         assign(closeRing(ring), 'w', { kind: t.waterway === 'riverbank' ? 0 : waterPolyKind(t) });
         waterPolys.push({ pts: ring, area: ringArea2(ring) });
+        maskPolys.push({ pts: ring, area: ringArea2(ring) });
       }
       stats.waterPoly += rings.length;
     } else if (WLINE[t.waterway] !== undefined) {
       const pts = linePts(g);
       if (!pts || pts.length < 4) { stats.waterSkipped++; continue; }
       const runs = clipLine(pts);
-      for (const run of runs) assign(run, 'w', { kind: WLINE[t.waterway] });
+      for (const run of runs) { assign(run, 'w', { kind: WLINE[t.waterway] }); waterLines.push({ pts: run, hw: WLINE[t.waterway] / 2 });
+        maskLines.push({ pts: run, hw: WWIDTH[WLINE[t.waterway]] / 2 }); }
       stats.waterLine += runs.length;
     } else stats.waterSkipped++; // ditch / drain / other waterways: skipped in v1
   } else if (el.type === 'relation' && el.members) { // water multipolygons: outer rings only (v1)
@@ -419,6 +425,7 @@ for (const el of waterEls) {
       for (const ring of clipRing(pts)) {
         assign(closeRing(ring), 'w', { kind: waterPolyKind(t) });
         waterPolys.push({ pts: ring, area: ringArea2(ring) });
+        maskPolys.push({ pts: ring, area: ringArea2(ring) });
       }
       stats.waterPoly++;
     }
@@ -463,6 +470,75 @@ for (const el of greenEls) {
   stats.greenRecs += rings.length;
 }
 
+// ---------- water vs land objects: automated fix for every new city ----------
+// OSM riverbank polygons and widened centreline ribbons both draw a visible water surface; either
+// one can cover houses or paths mapped on the bank. Fix the DATA instead of hoping the renderer
+// hides it: drop buildings mostly underwater, elevate ways crossing big water (bridge deck), and
+// clip the submerged runs of ways that merely run along the water. QA re-checks the same mask.
+const mask = makeMask(maskPolys, maskLines);
+let droppedBuildings = 0, elevatedRoads = 0, clippedRoads = 0, clippedRuns = 0;
+for (const t of tiles.values()) {
+  const ox = t.tx * S, oz = t.tz * S;
+  // t.b holds tile-local cm — add the tile origin to get mask-frame metres
+  const toM = (pts) => { const p = new Array(pts.length); for (let i = 0; i < pts.length; i += 2) { p[i] = ox + pts[i] / CM; p[i + 1] = oz + pts[i + 1] / CM; } return p; };
+  t.b = t.b.filter((b) => { const wet = submerged(mask, toM(b.pts)); if (wet >= 0.6) { droppedBuildings++; return false; } return true; });
+  const outR = [];
+  for (const r of t.r) {
+    const p = toM(r.pts);
+    let len = 0;
+    for (let i = 0; i + 3 < p.length; i += 2) len += Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]);
+    // a 2-point way has no vertex at mid-span: the deck profile would stay at the 6 cm base.
+    // Densify to <= 15 m steps before computing heights, then write the points back.
+    const densify = (src) => {
+      const out = [src[0], src[1]];
+      for (let i = 0; i + 3 < src.length; i += 2) {
+        const ax = src[i], az = src[i + 1], bx = src[i + 2], bz = src[i + 3], L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(L / 15));
+        for (let k = 1; k <= n; k++) out.push(ax + (bx - ax) * k / n, az + (bz - az) * k / n);
+      }
+      return out;
+    };
+    const setDeck = (src) => {
+      const dp = densify(src), H = r.cls <= 7 ? 5 : 3;
+      r.pts = dp.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM));
+      r.ys = deckHeights(dp, H);
+    };
+    if (r.flags & 2) { // already tagged/auto-detected: a clipped fragment may carry a flat ys slice
+      if (len < 12) continue; // a tiny fragment cannot be a bridge — drop it
+      if (!r.ys || Math.max(...r.ys) < 120) setDeck(p);
+      if (!r.ys || Math.max(...r.ys) < 120) continue; // degenerate fragment — never ship a flat deck
+      if (r.ys.length !== r.pts.length / 2) throw new Error(`deck/pts mismatch after repair: ${r.ys.length} vs ${r.pts.length / 2}`);
+      outR.push(r); continue;
+    }
+    if (crossesBig(mask, p, 2)) { // a real crossing: deck instead of a drowned road
+      r.flags |= 2;
+      setDeck(p);
+      elevatedRoads++; outR.push(r); continue;
+    }
+    // no bridge: keep only the runs of this way that stand on dry land
+    let run = [], wet = 0;
+    const flush = () => { if (run.length >= 4) { outR.push({ ...r, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) }); clippedRuns++; } run = []; };
+    for (let i = 0; i < p.length; i += 2) {
+      if (inWater(mask, p[i], p[i + 1], -0.5)) { wet++; flush(); }
+      else run.push(p[i], p[i + 1]);
+    }
+    flush();
+    if (wet) clippedRoads++;
+  }
+  // final pass: a clipped fragment whose ENDPOINTS are dry can still cross water mid-segment
+  for (const r of outR) if (!(r.flags & 2) && crossesBig(mask, toM(r.pts), 2)) {
+    const p = toM(r.pts), dp = densify(p);
+    r.flags |= 2;
+    r.pts = dp.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM));
+    r.ys = deckHeights(dp, r.cls <= 7 ? 5 : 3);
+    elevatedRoads++;
+  }
+  t.r = outR;
+}
+stats.waterBuildingsDropped = droppedBuildings;
+stats.waterRoadsElevated = elevatedRoads;
+stats.waterRoadsClipped = clippedRoads;
+stats.waterRunsKept = clippedRuns;
+
 // ---------- poses: 6 real Grodno viewpoints (local metres via geoToLocal) ----------
 const [nemX, nemZ] = L(53.6790, 23.8170);   // over the Neman near the Soviet bridge
 const [casX, casZ] = L(53.6760, 23.8220);   // the Old Castle
@@ -482,8 +558,10 @@ const poses = [
 ];
 
 // ---------- emit ----------
-const B = new MPKBuilder({ id: ID, name: NAME, origin: ORIGIN, tileSize: S, bbox: BBOX, poses, fly: null, terrain: null });
 const tileList = [...tiles.values()].sort((a, b) => a.tx - b.tx || a.tz - b.tz);
+let stringsCount = 0;
+const emitPack = () => {
+const B = new MPKBuilder({ id: ID, name: NAME, origin: ORIGIN, tileSize: S, bbox: BBOX, poses, fly: null, terrain: null });
 for (const t of tileList) {
   const layers = [];
   if (t.b.length) layers.push({ kind: 1, recs: t.b });
@@ -495,8 +573,11 @@ for (const t of tileList) {
 }
 B.graph(nodes, edges);
 const buf = B.finish();
+stringsCount = B.h.strings.length;
 mkdirSync(path.join(root, 'packs'), { recursive: true });
 writeFileSync(path.join(root, 'packs/grodno.mpk'), buf);
+};
+emitPack();
 
 // ---------- stats ----------
 const buildings = tileList.reduce((s, t) => s + t.b.length, 0), roads = tileList.reduce((s, t) => s + t.r.length, 0),
@@ -507,7 +588,7 @@ const dist = tileList.map((t) => ({ tile: `${t.tx},${t.tz}`, b: t.b.length, r: t
 const perTile = dist.map((d) => d.b + d.r + d.w + d.g);
 stats.tiles = dist;
 stats.tileCount = dist.length;
-stats.fileSize = buf.length;
+stats.fileSize = statSync(path.join(root, 'packs/grodno.mpk')).size;
 writeFileSync(path.join(here, 'cache', 'grodno-stats.json'), JSON.stringify(stats, null, 1));
 
 console.log(`build: buildings ${buildings} (closed ways ${stats.wayBuildings}, open ways skipped ${stats.wayBuildingsOpen}; relations ${stats.relBuildings}: outer rings +${stats.relOuterRings}, inner rings ${stats.relInner} → ${stats.relInnerEmitted} holes (dropped ${stats.relInnerDropped}${stats.relHoleSelfInt ? `, ${stats.relHoleSelfInt} self-intersecting` : ''}), open outer skipped ${stats.relOuterOpen})`);
@@ -519,7 +600,7 @@ console.log(`build: graph ${nodes.length} nodes, ${edges.length} edges (drivable
 console.log(`build: ${dist.length} tiles, recs/tile min ${Math.min(...perTile)} avg ${Math.round(perTile.reduce((a, b) => a + b, 0) / perTile.length)} max ${Math.max(...perTile)}`);
 const top = [...dist].sort((a, b) => (b.b + b.r + b.w + b.g) - (a.b + a.r + a.w + a.g)).slice(0, 10);
 console.log('build: busiest tiles: ' + top.map((d) => `${d.tile}(b${d.b}/r${d.r}/w${d.w}/g${d.g})`).join(' '));
-console.log(`build: packs/grodno.mpk ${(buf.length / 1024 / 1024).toFixed(2)} MB, ${B.h.strings.length} strings, poses ${poses.length}`);
+console.log(`build: packs/grodno.mpk ${(stats.fileSize / 1024 / 1024).toFixed(2)} MB, ${stringsCount} strings, poses ${poses.length}`);
 
 // landmark sanity: the Old Castle ~[53.676,23.822] must sit within ~±100 m of where the poses put it
 const [cx, cz] = L(53.676, 23.822);
@@ -533,9 +614,26 @@ console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${
 // ---------- pack QA: every shipped defect class is a gate here — a new city fails its build ----------
 console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
 console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridgesAuto} auto-flagged over water`);
+console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings, elevated ${stats.waterRoadsElevated} roads, clipped ${stats.waterRoadsClipped} roads into ${stats.waterRunsKept} dry runs`);
 {
   const { qa } = await import('./qa.mjs');
-  const rep = await qa('packs/grodno.mpk');
+  let rep;
+  // self-heal: QA returns the exact tile + world point of a bad road; remove it, re-emit, re-check.
+  for (let pass = 0; pass < 4; pass++) {
+    rep = await qa('packs/grodno.mpk');
+    if (!rep.errors.length) break;
+    let removed = 0;
+    for (const e of rep.errors) for (const f of (e.fix || [])) {
+      const t = tileList[f.tile]; if (!t) continue;
+      const before = t.r.length;
+      t.r = t.r.filter((r) => !(Math.abs(t.tx * S + r.pts[0] / 100 - f.x) < 1 && Math.abs(t.tz * S + r.pts[1] / 100 - f.z) < 1));
+      if (t.r.length < before) removed++;
+    }
+    if (!removed) break;
+    emitPack();
+    console.log(`build: QA self-heal pass ${pass + 1} removed ${removed} bad road record(s)`);
+  }
+  rep = await qa('packs/grodno.mpk');
   console.log(`build: QA — ${rep.errors.length} errors, ${rep.warns.length} warns (joints ${rep.stats.roadJoints}, gaps ${rep.stats.roadJointGaps})`);
   for (const e of rep.errors) console.log('  QA ERROR:', e.check, e.msg);
   for (const w of rep.warns) console.log('  QA warn:', w.check, w.msg);

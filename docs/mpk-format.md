@@ -91,7 +91,7 @@ per LOD:
                  //   (first point == last point, tolerance 1 cm; the pipeline appends the first
                  //   point after clipping), triangulated as simple polygons, never fans
                  // water LINE kinds: 8 river, 9 stream, 10 canal — open centrelines; renderers
-                 //   widen them into ribbons (river 55 m, stream 4 m, canal 15 m full width)
+                 //   widen them into ribbons (river 12 m, stream 4 m, canal 12 m full width)
                  // green kind: 0 park, 1 forest, 2 grass, 3 other — closed rings, same contract
       terrainPatch: u8 cell, u8 n, i16 h[n*n]   // decimetres, row-major, local to the tile's corner
 ```
