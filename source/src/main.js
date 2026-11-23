@@ -712,7 +712,7 @@ function render() {
   if (slot) { e.resolveQuerySet(qs, 0, NP * 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, NP * 16); }
   submitList[0] = e.finish(); Q.submit(submitList);
   if (slot) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
-  updateLabels(U);
+  updateLabels(PVP); // the unjittered matrix: TAA's per-frame sub-pixel offset must not move labels
   F[FRAME] = fr + 1; F[RESET] = 0;
 }
 
@@ -720,11 +720,10 @@ function render() {
 // main view matrix (same layout as the vertex shader), the placement uses the shared collision
 // grid; no geometry rebuild and no per-frame allocation beyond the short candidate list.
 const LAB_LAYER = $('labs'), LAB_POOL = [];
-let labTick = 0, labState = [];
+let labState = [];
 window.__labelState = () => labState.slice(); // dev.js __shot composites these into stills
 const updateLabels = (U) => {
   if (!LAB_LAYER) return;
-  if ((labTick++ & 3) !== 0 && labState.length) return; // every 4th frame is plenty
   const w = innerWidth, h = innerHeight, cx = U[O_CAM], cy = U[O_CAM + 1], cz = U[O_CAM + 2];
   const cand = [];
   for (const e of Wd.labels) {
@@ -750,7 +749,9 @@ const updateLabels = (U) => {
     const cls = e.kind ? 'lab street' : 'lab num';
     if (d.className !== cls) d.className = cls;
     d.style.display = '';
-    d.style.transform = `translate(${e.sx.toFixed(1)}px,${e.sy.toFixed(1)}px) translate(-50%,-50%)`;
+    // whole pixels + write-only-on-change: the TAA sub-pixel wobble must never reach DOM labels
+    const tf = `translate(${Math.round(e.sx)}px,${Math.round(e.sy)}px) translate(-50%,-50%)`;
+    if (d._tf !== tf) { d.style.transform = tf; d._tf = tf; }
   }
   for (let i = chosen.length; i < LAB_POOL.length; i++) if (LAB_POOL[i].style.display !== 'none') LAB_POOL[i].style.display = 'none';
 };

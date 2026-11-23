@@ -66,6 +66,15 @@ test('pack roundtrip: housenumber string survives; legacy packs decode safely', 
   assert.doesNotThrow(async () => { const t = await E2.mpkTile(P, 0); if (t.lods[0][0].recs[0].num !== 0) throw new Error('num must default to 0'); });
 });
 
+test('label overlay uses the unjittered matrix and writes whole pixels only on change', () => {
+  const src = readFileSync(path.join(ROOT, 'source', 'src', 'main.js'), 'utf8');
+  assert.match(src, /updateLabels\(PVP\);/, 'TAA jitter must not move DOM labels');
+  assert.doesNotMatch(src, /updateLabels\(U\);/, 'the jittered view matrix is for pixels, not text');
+  assert.match(src, /Math\.round\(e\.sx\)\}px/, 'positions snap to whole pixels');
+  assert.match(src, /if \(d\._tf !== tf\)/, 'no DOM write when the rounded position is unchanged');
+  assert.doesNotMatch(src, /labTick/, 'labels refresh every frame, not in 4-frame jumps');
+});
+
 test('both label layers default on, have query overrides and an independent toggle each', () => {
   const src = readFileSync(path.join(ROOT, 'source', 'src', 'main.js'), 'utf8');
   assert.match(src, /let showNum = 1, showStreet = 1;/, 'both default on');
