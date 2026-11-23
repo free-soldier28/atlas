@@ -34,8 +34,9 @@ async function mpkTile(P, i) {
           const nPts = u16(), bkind = u8v(), roof = u8v(), h10 = i16(), base10 = i16();
           let osmId = 0, src = 0;
           if (P.h.v >= 2) { osmId = u32(); src = u8v(); } // v1 packs have no provenance
+          const num = P.h.labels ? u16() : 0; // header flag: housenumber string index (labels)
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();
-          recs.push({ pts, bkind, roof, h10, base10, osmId, src });
+          recs.push({ pts, bkind, roof, h10, base10, osmId, src, num });
         } else if (kind === 2) {
           const cls = u8v(), flags = u8v(), name = u16(), lanes = u8v(), w10 = i16(), nPts = u16();
           const pts = new Int32Array(nPts * 2); for (let j = 0; j < nPts * 2; j++) pts[j] = i32();

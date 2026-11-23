@@ -13,7 +13,7 @@ const CLSW = [30, 24, 18, 14, 11, 8, 6.5, 5, 4, 2, 1.5];
 const WW = { 8: 55, 9: 4, 10: 15 };
 
 async function buildWorld(PK) { // async: tiles and the graph inflate on demand
-  const meshes = [], types = [];
+  const meshes = [], types = [], labels = [];
   const emptyMesh = () => new MB(1).build(); // zero-vertex far LOD: windows vanish before the far distance
   let IB = new ArrayBuffer(48 << 14), IF = new Float32Array(IB), IU = new Uint32Array(IB), nI = 0;
   // up to four LODs switched at d01, d12, d23, gone beyond dmax; thin > 0: distance where instances start thinning out
@@ -238,6 +238,35 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
         }
       } // kind 1 → cityTile above; kind 6 holes consumed above; kind 5 (terrain) and unknown kinds: skipped
     }
+    // labels: housenumbers ride on building records (header strings), street names on road records.
+    // One anchor per record; dedupe() folds repeated way names into one label per world cell.
+    for (const L of lods) {
+      if (L.kind === 1) for (const b of L.recs) {
+        if (!b.num) continue;
+        const n = b.pts.length / 2; let ax = 0, az = 0;
+        for (let k = 0; k < b.pts.length; k += 2) { ax += b.pts[k]; az += b.pts[k + 1]; }
+        labels.push({ x: ox + ax / n / 100, z: oz + az / n / 100, y: (b.h10 + b.base10) / 10 + 0.6,
+          text: PK.h.strings[b.num] || '', kind: 0, priority: 1 });
+      } else if (L.kind === 2) for (const r of L.recs) {
+        if (!r.name) continue;
+        let total = 0;
+        for (let k = 0; k + 3 < r.pts.length; k += 2) total += hypot(r.pts[k + 2] - r.pts[k], r.pts[k + 3] - r.pts[k + 1]);
+        const half = total / 2;
+        let acc = 0, mx = r.pts[0], mz = r.pts[1], my = 1;
+        for (let k = 0; k + 3 < r.pts.length; k += 2) {
+          const sl = hypot(r.pts[k + 2] - r.pts[k], r.pts[k + 3] - r.pts[k + 1]);
+          if (sl > 0 && acc + sl >= half) {
+            const t = (half - acc) / sl;
+            mx = r.pts[k] + (r.pts[k + 2] - r.pts[k]) * t;
+            mz = r.pts[k + 1] + (r.pts[k + 3] - r.pts[k + 1]) * t;
+            if (r.ys) my = r.ys[min(r.ys.length - 1, round(k / 2 + t / 2))] / 100 + 2;
+            break;
+          }
+          acc += sl;
+        }
+        labels.push({ x: ox + mx / 100, z: oz + mz / 100, y: my, text: PK.h.strings[r.name] || '', kind: 1, priority: 0 });
+      }
+    }
     // buildings: one type per tint bucket; LODs run near → far (the cull pass switches up with distance),
     // so the facade carries slot 0, strips slot 1 and the plain prism slot 2. An empty LOD reuses its
     // neighbour (identical geometry cross-fades harmlessly). Roofs: caps near, plain ear-clip top far.
@@ -270,5 +299,6 @@ async function buildWorld(PK) { // async: tiles and the graph inflate on demand
 
   const hard = { domes: [], halls: [], villas: [], shapes: [] }; // Atlantis shapes are gone; boxes rule now
   // type/put: the same closures, exposed so gps.js can add the vehicle marker after the build
-  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put };
+  return { meshes, types, inst: IB.slice(0, nI * 48), nI, MAP, LANDMAP, ground: () => 0, hard, bboxes, type, put,
+    labels: dedupe(labels), strings: PK.h.strings || [] };
 }

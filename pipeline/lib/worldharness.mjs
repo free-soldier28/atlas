@@ -30,9 +30,10 @@ export const engine = async () => {
       src('globals.js'),
       /^const M = \{[^}]*\};/m.exec(src('sh_scene.js'))[0], // material ids, verbatim from sh_scene.js
       src('citygen.js'),
+      src('labels.js'),
       src('world.js'),
     ].join('\n');
-    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld };');
+    (0, eval)(script + '\n;globalThis.__atlasEngine = { M, K, WATER, mpkOpen, mpkTile, mpkGraph, buildWorld, dedupe, place };');
     return globalThis.__atlasEngine;
   })();
   return bootPromise;

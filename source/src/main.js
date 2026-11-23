@@ -83,6 +83,13 @@ try { const nq = QP.get('night'); night = nq !== null ? +(nq === '1') : AUTO ? 0
 // one for headless probes, otherwise the saved drawer choice. Toggling only gates K.GLASS draws.
 let windows = 0;
 try { const wq = QP.get('win'); windows = wq !== null ? +(wq === '1') : AUTO ? 0 : +(localStorage.atlasWin === '1'); } catch {}
+// two independent label layers: house numbers and street names. Both on by default; ?num / ?street
+// force a value (headless probes), otherwise the saved drawer choice. DOM overlay, no rebuild.
+let showNum = 1, showStreet = 1;
+try { const nq = QP.get('num'), sq = QP.get('street');
+  showNum = nq !== null ? +(nq === '1') : AUTO ? 1 : localStorage.atlasNum !== '0';
+  showStreet = sq !== null ? +(sq === '1') : AUTO ? 1 : localStorage.atlasStreet !== '0';
+} catch {}
 // sun at the ground: atmospheric transmittance x 1.35 (keeps sunlit paving warm rather than grey); night: the moon.
 // Strict physics (the task brief's 1/4e4) renders black under AgX at the night exposure, so the moon carries
 // ~1/200 of the sun (MOONGROUND) and the night sky table is lifted to a visible dark blue (MOONSKY) — art-directed.
@@ -530,8 +537,48 @@ function render() {
   if (slot) { e.resolveQuerySet(qs, 0, NP * 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, NP * 16); }
   submitList[0] = e.finish(); Q.submit(submitList);
   if (slot) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
+  updateLabels(U);
   F[FRAME] = fr + 1; F[RESET] = 0;
 }
+
+// screen-space label overlay: one div per visible label from a fixed pool. Projection reuses the
+// main view matrix (same layout as the vertex shader), the placement uses the shared collision
+// grid; no geometry rebuild and no per-frame allocation beyond the short candidate list.
+const LAB_LAYER = $('labs'), LAB_POOL = [];
+let labTick = 0, labState = [];
+window.__labelState = () => labState.slice(); // dev.js __shot composites these into stills
+const updateLabels = (U) => {
+  if (!LAB_LAYER) return;
+  if ((labTick++ & 3) !== 0 && labState.length) return; // every 4th frame is plenty
+  const w = innerWidth, h = innerHeight, cx = U[O_CAM], cy = U[O_CAM + 1], cz = U[O_CAM + 2];
+  const cand = [];
+  for (const e of Wd.labels) {
+    if (!(e.kind ? showStreet : showNum)) continue;
+    const dx = e.x - cx, dy = e.y - cy, dz = e.z - cz, d2 = dx * dx + dy * dy + dz * dz;
+    const far = e.kind ? 300 : 220;
+    if (d2 > far * far) continue;
+    cand.push({ ...e, dist: Math.sqrt(d2) });
+  }
+  const chosen = place(cand, (e) => {
+    const cw = U[0] * e.x + U[4] * e.y + U[8] * e.z + U[12];
+    const cwy = U[1] * e.x + U[5] * e.y + U[9] * e.z + U[13];
+    const cww = U[3] * e.x + U[7] * e.y + U[11] * e.z + U[15];
+    if (cww <= 1) return null;
+    return [(cw / cww * 0.5 + 0.5) * w, (0.5 - cwy / cww * 0.5) * h, e.dist];
+  }, { W: w, H: h, max: 110, cellW: 66, cellH: 26, pad: 3, quota: { 1: 34 }, widthOf: (t) => t.length * 6.6 + 14 });
+  labState = chosen.map((e) => ({ text: e.text, x: e.sx, y: e.sy, kind: e.kind }));
+  for (let i = 0; i < chosen.length; i++) {
+    let d = LAB_POOL[i];
+    if (!d) { d = document.createElement('div'); LAB_LAYER.appendChild(d); LAB_POOL[i] = d; }
+    const e = chosen[i];
+    if (d.textContent !== e.text) d.textContent = e.text;
+    const cls = e.kind ? 'lab street' : 'lab num';
+    if (d.className !== cls) d.className = cls;
+    d.style.display = '';
+    d.style.transform = `translate(${e.sx.toFixed(1)}px,${e.sy.toFixed(1)}px) translate(-50%,-50%)`;
+  }
+  for (let i = chosen.length; i < LAB_POOL.length; i++) if (LAB_POOL[i].style.display !== 'none') LAB_POOL[i].style.display = 'none';
+};
 
 const render0 = render; // dev.js wraps `render`
 let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, menu = false; // menu: input suppressed while the drawer is open (dev.js also sets it)
@@ -626,6 +673,13 @@ const colUI = () => { const r = $('cb'); if (r) { r.textContent = solid ? 'On' :
 const winUI = () => { const r = $('wi'); if (r) { r.textContent = windows ? 'On' : 'Off'; r.className = windows ? 'on' : ''; } };
 const setWindows = (v) => { windows = v === undefined ? 1 - windows : +!!v; if (!AUTO) { try { localStorage.atlasWin = windows ? '1' : '0'; } catch {} } winUI(); return windows; };
 window.__windows = setWindows; // headless probes / tests
+// the two label layers toggle independently — both feed the same DOM overlay
+const numUI = () => { const r = $('ln'); if (r) { r.textContent = showNum ? 'On' : 'Off'; r.className = showNum ? 'on' : ''; } };
+const streetUI = () => { const r = $('ls'); if (r) { r.textContent = showStreet ? 'On' : 'Off'; r.className = showStreet ? 'on' : ''; } };
+const setNum = (v) => { showNum = v === undefined ? 1 - showNum : +!!v; if (!AUTO) { try { localStorage.atlasNum = showNum ? '1' : '0'; } catch {} } numUI(); return showNum; };
+const setStreet = (v) => { showStreet = v === undefined ? 1 - showStreet : +!!v; if (!AUTO) { try { localStorage.atlasStreet = showStreet ? '1' : '0'; } catch {} } streetUI(); return showStreet; };
+window.__numbers = setNum;
+window.__streets = setStreet;
 
 // the settings drawer: Esc or ⚙ toggles, a click outside closes it; the scene keeps running behind it
 let open = false;
@@ -650,6 +704,8 @@ $('hs').onclick = () => setHud(!hud);
 $('hb').onclick = () => setHud(!hud);
 $('cb').onclick = () => { solid = !solid; colUI(); };
 if ($('wi')) $('wi').onclick = () => setWindows();
+if ($('ln')) $('ln').onclick = () => setNum();
+if ($('ls')) $('ls').onclick = () => setStreet();
 $('nt').onclick = () => setNight(1 - night);
 $('lc').onclick = () => locate();
 $('ct').onclick = () => { setDrawer(true); const ci = $('ci'); if (!ci.hidden) ci.scrollIntoView({ block: 'nearest' }); };
@@ -723,7 +779,7 @@ dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
 dnB[night ? 1 : 0].className = 'on';
 const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night ? 'Day (N)' : 'Night (N)'; // the stack glyph mirrors the profile
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
-colUI(); winUI();
+colUI(); winUI(); numUI(); streetUI();
 
 // start camera: above the user's position when geolocation answers within its 4 s budget (a fix far outside
 // the pack counts as no fix), else the pack's first viewpoint. Placement only — no follow camera, no marker.

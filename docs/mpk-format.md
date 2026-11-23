@@ -61,7 +61,8 @@ per LOD:
     u8  kind                  // 1 buildings, 2 roads, 3 water, 4 green, 5 terrainPatch, 6 buildingHole
     u32 nRec
     per record, by kind:
-      buildings: u16 nPts, u8 bkind, u8 roof, i16 h10, i16 base10, u32 osmId, u8 src, i32 pts[nPts*2]
+      buildings: u16 nPts, u8 bkind, u8 roof, i16 h10, i16 base10, u32 osmId, u8 src, [u16 num] i32 pts[nPts*2]
+                 // num: housenumber string index (header "labels": 1), 0 = none; absent in older packs
                  // h10: roof top above ground in 0.1 m; base10: base above ground;
                  // bkind: building type code; roof: 0 flat, 1 gable, 2 hip (rendered flat in v1);
                  // osmId: OSM way/relation id — the improvement loop's address of this building;

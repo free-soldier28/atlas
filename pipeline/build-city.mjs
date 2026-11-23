@@ -67,7 +67,8 @@ const roofCode = (t) => (t === 'gabled' ? 1 : t === 'hipped' ? 2 : 0);    // 0 f
 const buildingRec = (tags, id = 0, rel = false) => { // base can never sit above the roof top
   const H = buildingHeight(tags), h10 = Math.round(H.h * 10);
   const src = (H.src & 3) | (tags['roof:shape'] ? 4 : 0) | ((tags['building:colour'] ?? tags.colour) !== undefined ? 8 : 0) | (rel ? 16 : 0);
-  return { bkind: bkind(tags), roof: roofCode(tags['roof:shape']), h10, base10: Math.min(base10Of(tags), h10), osmId: id | 0, src };
+  return { bkind: bkind(tags), roof: roofCode(tags['roof:shape']), h10, base10: Math.min(base10Of(tags), h10), osmId: id | 0, src,
+    num: tags['addr:housenumber'] || tags['addr:housename'] || '' }; // label text, stored in the header string table
 };
 
 function base10Of(tags) {

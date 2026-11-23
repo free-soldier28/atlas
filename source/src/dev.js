@@ -43,9 +43,27 @@
     if (e.code === 'KeyF' || e.code === 'KeyB') { if (flying) stop(); else start(e.code === 'KeyB'); } else if (/Digit[1-6]/.test(e.code)) stop();
   });
   const c2 = document.createElement('canvas');
+  // stills composite the DOM label overlay onto the canvas: a WebGPU canvas.toDataURL only carries
+  // the rendered frame, but __shot must show what the user sees
   const grab = (crop) => {
-    if (!crop) return canvas.toDataURL('image/png');
-    c2.width = crop[2]; c2.height = crop[3]; c2.getContext('2d').drawImage(canvas, crop[0], crop[1], crop[2], crop[3], 0, 0, crop[2], crop[3]);
+    const W = crop ? crop[2] : canvas.width, H = crop ? crop[3] : canvas.height;
+    c2.width = W; c2.height = H;
+    const g = c2.getContext('2d');
+    g.drawImage(canvas, crop ? crop[0] : 0, crop ? crop[1] : 0, W, H, 0, 0, W, H);
+    const labs = window.__labelState ? window.__labelState() : [];
+    if (labs.length) {
+      const kx = W / innerWidth, ky = H / innerHeight, ox = crop ? crop[0] : 0, oy = crop ? crop[1] : 0;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      for (const l of labs) {
+        const x = (l.x - ox) * kx, y = (l.y - oy) * ky;
+        g.font = `${l.kind ? '600 12px' : '600 11px'} system-ui, sans-serif`;
+        const tw = g.measureText(l.text).width + 12, th = l.kind ? 18 : 16;
+        g.fillStyle = l.kind ? 'rgba(26,40,52,.79)' : 'rgba(18,22,20,.72)';
+        g.beginPath(); g.roundRect(x - tw / 2, y - th / 2, tw, th, 5); g.fill();
+        g.fillStyle = l.kind ? '#d9ecff' : '#fff';
+        g.fillText(l.text, x, y + 0.5);
+      }
+    }
     return c2.toDataURL('image/png');
   };
   window.__shot = async (o) => {
