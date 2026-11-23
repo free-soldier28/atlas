@@ -84,6 +84,14 @@ const W_FX2 = /*wgsl*/`
   // ambient in the body: night keeps the water black glass (the sky table is dim, but the moon's share is cut too)
   let amb = (skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12) * mix(1., .35, view.night.x);
   let shw = shadow(p, vec3f(0., 1., 0.));
+  if (kind == 0u) {
+    // Inland bodies sit 4 cm above the flat lawn plane: the refracted "bed" is the city's grass
+    // texture, which reads through the surface as green glass. Replace it with a silt/gravel bed
+    // from the same palette as the shore, broken up at two scales so ripples still reveal a bottom.
+    let bedN = textureSampleGrad(tNoiseA, sRep, p.xz * .55, dx * .55, dy * .55);
+    let grit = textureSampleGrad(tNoiseA, sRep, p.xz * 4.3, dx * 4.3, dy * 4.3);
+    under = mix(vec3f(.075, .077, .058), vec3f(.185, .17, .135), bedN.r * .75 + grit.g * .25) * (.6 + .4 * shw);
+  }
   if (kind == 0u) { sig = vec3f(.6, .12, .08); scat = vec3f(.002, .05, .045) * amb; sA = .4; }
   else if (kind == 1u) { sig = vec3f(2.4, 3., 1.3); scat = vec3f(.011, .006, .12) * (.35 + .65 * shw); sA = 2.5; }
   else { sig = vec3f(.4, .08, .06); scat = vec3f(.001, .012, .028) * amb * (1. + 1.4 * sat(p.y * 2. + .15)); sA = .1; } // crests let more light through
