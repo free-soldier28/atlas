@@ -355,9 +355,10 @@ await say('Casting shadows…', 0.8);
 // sizes: SHN in quality.js; with no cascade one texel stands in
 const D16 = 'depth16unorm', DFAR = SH32 ? DEPTH : D16;
 const tSh = [tex(SHN[0] || 1, SHN[0] || 1, DEPTH, RT), tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
-// the night profile's baked maps: allocated now (two sets fit), filled by the first switch to night
-const tShN = [tSh[0], tex(SHN[1], SHN[1], D16, RT), tex(SHN[2], SHN[2], DFAR, RT), tex(SHN[3], SHN[3], DFAR, RT)];
-const shReady = [false, false]; // per profile: its baked maps are valid (the camera cascade tSh[0] is shared)
+// One set of baked maps for both profiles: the sun turns with N, so the maps are re-baked on a
+// switch (a short hitch) instead of holding a second 40+ MB set resident. The camera cascade is shared.
+const tShN = tSh;
+
 const pSh32 = CASC ? shPipe(DEPTH) : null, pSh16 = shPipe(D16), pShFar = SH32 ? pSh32 : pSh16, tTop = tex(TOPPX, TOPPX, 'r16float', RT, { mips: 8 });
 const depthPass = (t, clear = true) => ({ colorAttachments: [], depthStencilAttachment: { view: t.createView(), depthClearValue: 1, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store' } });
 const drawList = (r, v, list) => { for (let i = 0; i < list.length; i++) r.drawIndexedIndirect(bArgs[v], list[i] * 20); };
@@ -393,11 +394,11 @@ const bakeShadowMaps = async (dst) => {
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true, false); U[O_MISC + 2] = 1; await castInto(dst[3], pShFar, 6800); await Q.onSubmittedWorkDone();
 };
 const tShT0 = performance.now();
-await bakeShadowMaps(night ? tShN : tSh); shReady[night] = true;
+await bakeShadowMaps(tSh);
 if (QP.has('log')) console.log(`shadow bake (${night ? 'night' : 'day'} sun) ${((performance.now() - tShT0) / 1000).toFixed(2)} s`);
 // lazy tiles arrive after those maps were baked; once the queue drains, bake the active profile
 // again so distant casters are present. The same helper fills the inactive profile at night switches.
-rebakeShadows = () => { bakeShadowMaps(night ? tShN : tSh).then(() => { shReady[night ? 1 : 0] = true; }); };
+rebakeShadows = () => { bakeShadowMaps(tSh); };
 startFill(); // overlap the remaining tile meshing with pipeline setup and the first frames
 // the bake writes the map matrices into the shadow view only, and the light pass reads them from
 // the main view: without this copy the far maps sampled with zero matrices — shadows existed only
@@ -565,13 +566,11 @@ const setNight = async (n) => {
   night = n;
   ACTIVE_SUN = n ? NIGHT_SUN : SUN; LR = vnorm([ACTIVE_SUN[2], 0, -ACTIVE_SUN[0]]); LU = vcross(ACTIVE_SUN, LR);
   for (const U of UB) setViewSun(U, n);
-  if (!shReady[n]) {
-    rebake = true;
-    const t0 = performance.now();
-    await bakeShadowMaps(n ? tShN : tSh); shReady[n] = true;
-    if (QP.has('log')) console.log(`shadow rebake (${n ? 'night' : 'day'} sun) ${((performance.now() - t0) / 1000).toFixed(2)} s`);
-    rebake = false;
-  }
+  rebake = true;
+  const t0 = performance.now();
+  await bakeShadowMaps(tSh); // one shared set: every profile switch re-bakes for its sun
+  if (QP.has('log')) console.log(`shadow rebake (${n ? 'night' : 'day'} sun) ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+  rebake = false;
   shadowMat(O_SM + 16, 0, 0, 0, 480, -900, 900, SHN[1], true);
   shadowMat(O_SM + 32, 0, 0, 0, 1400, -2600, 2600, SHN[2], true);
   shadowMat(O_SM + 48, 0, 0, 0, 6800, -9000, 9000, SHN[3], true);

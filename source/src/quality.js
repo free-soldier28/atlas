@@ -31,8 +31,9 @@ else if (!AUTO) {
 }
 const QL = (h, m, l) => (LV > 1 ? l : LV ? m : h), LVN = ['High', 'Medium', 'Low'];
 // sun shadow map sizes: the camera cascade (0: none), then the baked city, shelf and mountain maps. 32-bit depth
-// for the close cascade (16-bit gave bright rings around the low sun)
-const SHN = QL([2048, 8192, 4096, 2048], [1024, 4096, 2048, 1024], [0, 4096, 2048, 1024]), SH32 = LV < 2, CASC = SHN[0];
+// for the close cascade (16-bit gave bright rings around the low sun). Phones and the Low level use a quarter of
+// the baked texels — with one shared day/night set this keeps shadow memory in the tens of MB, not hundreds.
+const SHN = QL([2048, 8192, 4096, 2048], mob ? [1024, 2048, 1024, 512] : [1024, 4096, 2048, 1024], [0, 2048, 1024, 512]), SH32 = LV < 2, CASC = SHN[0];
 // LODs switch this much sooner (far limits stay: see `cull` in sh_scene.js)
 const LODK = QL(1, 1.3, 2);
 // the sea swell's fade in the vertex shader and fsWater (the sea's mesh builder is gone; terrain packs bring it back)
