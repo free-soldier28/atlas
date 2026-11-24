@@ -969,6 +969,9 @@ colUI(); winUI(); numUI(); streetUI(); ghostUI();
 
 // start camera: the pack's first viewpoint. Only the locate button / G moves it to a GPS fix.
 lookAt(...POSES[0]);
+// ?cam=x,y,z,tx,ty,tz — jump to a location straight from a link (local pack metres)
+const camArg = QP.get('cam');
+if (camArg) { const c = camArg.split(',').map(Number); if (c.length === 6 && c.every(Number.isFinite)) lookAt(...c); }
 F[VX] = F[VY] = F[VZ] = 0;
 startStream(); // Phase B: fill the pool around the start camera, then follow it
 // draw the first frames and wait for the GPU (pipelines compile on first use) before revealing

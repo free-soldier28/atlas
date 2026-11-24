@@ -331,7 +331,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         for (const r of L.recs) {
           const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
           earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100), r.kind); nG++;
-          if (LV < 2) scatterTrees(mTrunk, mCrown, pts, r.kind, rnd, taken); // phones keep the shader canopy only
+          scatterTrees(mTrunk, mCrown, pts, r.kind, rnd, taken);
         }
       } // kind 1 → cityTile above; kind 6 holes consumed above; kind 5 (terrain) and unknown kinds: skipped
     }

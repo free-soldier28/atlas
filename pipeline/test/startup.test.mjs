@@ -37,6 +37,14 @@ test('startup: no automatic geolocation request — only the locate button / G a
   assert.match(gps, /const gpsStart = \(\) => \{[\s\S]*?else gpsLabel\(\);/, 'GPS defaults to Off, not a live watch');
 });
 
+test('startup: ?cam=x,y,z,tx,ty,tz jumps to a location from a link', () => {
+  const m = src('main.js');
+  assert.match(m, /QP\.get\('cam'\)/, 'camera query parameter');
+  assert.match(m, /c\.length === 6 && c\.every\(Number\.isFinite\)/, 'invalid values are ignored');
+  const at = m.indexOf("QP.get('cam')"), look = m.indexOf('lookAt(...POSES[0]);');
+  assert.ok(at > look && at < m.indexOf('startStream();'), 'override applies before the stream follows the camera');
+});
+
 test('startup: tiles inflated in parallel batches, every tile still reaches the world', async () => {
   const w = src('world.js');
   assert.match(w, /const TB = 24;/, 'batched prefetch width');
