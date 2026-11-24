@@ -1,7 +1,7 @@
 // bridge vs building conflicts: the fix in build-city and the guard in qa must agree on one rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDeck, buildingHitsDeck, redundantDeck } from '../lib/bridge-conflicts.mjs';
+import { makeDeck, buildingHitsDeck, redundantDeck, hairpin } from '../lib/bridge-conflicts.mjs';
 
 // deck along x=0..100 at z=0, 12 m wide, 5 m high in the middle, ramps down at both ends
 const deck = makeDeck([0, 0, 40, 0, 60, 0, 100, 0], [6, 500, 500, 6], 6);
@@ -29,6 +29,11 @@ test('a big building straddling the corridor is caught by its centroid', () => {
 test('far buildings are rejected by the bbox prefilter', () => {
   const far = [500, 500, 510, 500, 510, 510, 500, 510];
   assert.equal(buildingHitsDeck(far, 30, deck), false);
+});
+
+test('hairpin: a way doubling back on itself is dropped, a normal bend is kept', () => {
+  assert.equal(hairpin([0, 0, 0, -12, 1.2, 0]), true, 'a 166° reversal folds the deck into a V');
+  assert.equal(hairpin([0, 0, 0, -12, 8, -16]), false, 'an ordinary bend stays');
 });
 
 test('a footway bridge parallel inside a road bridge is its sidewalk, not a second deck', () => {

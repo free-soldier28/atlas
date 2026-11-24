@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
 import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
-import { makeDeck, buildingHitsDeck, redundantDeck } from './lib/bridge-conflicts.mjs';
+import { makeDeck, buildingHitsDeck, redundantDeck, hairpin } from './lib/bridge-conflicts.mjs';
 import { makeMask, submerged, inWater, crossesBig, WET_BUILDING } from './lib/water-mask.mjs';
 import { collectCrossings } from './lib/crossings.mjs';
 
@@ -478,7 +478,7 @@ for (const el of greenEls) {
 // hides it: drop buildings mostly underwater, elevate ways crossing big water (bridge deck), and
 // clip the submerged runs of ways that merely run along the water. QA re-checks the same mask.
 const mask = makeMask(maskPolys, maskLines);
-let droppedBuildings = 0, elevatedRoads = 0, clippedRoads = 0, clippedRuns = 0;
+let droppedBuildings = 0, elevatedRoads = 0, clippedRoads = 0, clippedRuns = 0, droppedHairpinBridges = 0;
 for (const t of tiles.values()) {
   const ox = t.tx * S, oz = t.tz * S;
   // t.b holds tile-local cm — add the tile origin to get mask-frame metres
@@ -505,7 +505,7 @@ for (const t of tiles.values()) {
       r.ys = deckHeights(dp, H);
     };
     if (r.flags & 2) { // already tagged/auto-detected: a clipped fragment may carry a flat ys slice
-      if (len < 12) continue; // a tiny fragment cannot be a bridge — drop it
+      if (len < 12 || hairpin(p)) { if (hairpin(p)) droppedHairpinBridges++; continue; } // tiny or doubled-back way: no buildable deck
       if (!r.ys || Math.max(...r.ys) < 120) setDeck(p);
       if (!r.ys || Math.max(...r.ys) < 120) continue; // degenerate fragment — never ship a flat deck
       if (r.ys.length !== r.pts.length / 2) throw new Error(`deck/pts mismatch after repair: ${r.ys.length} vs ${r.pts.length / 2}`);
@@ -540,6 +540,7 @@ stats.waterBuildingsDropped = droppedBuildings;
 stats.waterRoadsElevated = elevatedRoads;
 stats.waterRoadsClipped = clippedRoads;
 stats.waterRunsKept = clippedRuns;
+stats.droppedHairpinBridges = droppedHairpinBridges;
 
 // A tagged bridge way often includes its approach ramps into the bank, and the corridor sweeps
 // straight through a building left in OSM (the "deck through a house" defect). Drop those
@@ -665,6 +666,7 @@ console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${
 console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
 console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridgesAuto} auto-flagged over water`);
 console.log(`build: pedestrian crossings ${stats.crossings} painted from tagged footways`);
+console.log(`build: dropped ${stats.droppedHairpinBridges} doubled-back bridge ways`);
 console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings, elevated ${stats.waterRoadsElevated} roads, clipped ${stats.waterRoadsClipped} roads into ${stats.waterRunsKept} dry runs`);
 {
   const { qa } = await import('./qa.mjs');

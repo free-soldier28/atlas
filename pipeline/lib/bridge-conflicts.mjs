@@ -48,6 +48,19 @@ export const redundantDeck = (short, long) => {
   return false;
 };
 
+// A way that doubles back on itself (≥150° turn) is broken bridge data: the mitered deck folds
+// into a V and can end in mid-air. Drop it instead of trying to build structure around it.
+export const hairpin = (p, limit = 2.6) => {
+  for (let i = 2; i + 3 < p.length; i += 2) {
+    const ax = p[i - 2], az = p[i - 1], bx = p[i], bz = p[i + 1], cx = p[i + 2], cz = p[i + 3];
+    const a1 = Math.atan2(bz - az, bx - ax), a2 = Math.atan2(cz - bz, cx - bx);
+    let turn = Math.abs(a2 - a1);
+    if (turn > Math.PI) turn = 2 * Math.PI - turn;
+    if (turn > limit) return true;
+  }
+  return false;
+};
+
 // does a building (flat [x,z,...] footprint, `top` in metres) intersect an elevated deck?
 export const buildingHitsDeck = (bp, top, deck) => {
   if (top < 0.5) return false;
