@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
-import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
+import { deckHeights, ysAt } from './lib/bridge.mjs';
 import { makeDeck, buildingHitsDeck, redundantDeck, hairpin } from './lib/bridge-conflicts.mjs';
 import { makeMask, submerged, inWater, crossesBig, WET_BUILDING } from './lib/water-mask.mjs';
 import { collectCrossings } from './lib/crossings.mjs';
@@ -435,6 +435,7 @@ for (const el of waterEls) {
 }
 
 // ---------- bridges + roads assign ----------
+const mask = makeMask(maskPolys, maskLines); // one mask for tagging, clipping and QA — no area drift
 // every way that crosses a big water polygon gets a deck: tagged by mappers, or auto-flagged when
 // the tag is missing (the recurring "road lies in the water" defect — detected, never re-approved).
 // Deck heights bake into the record per vertex (cm, ramps at both ends), the renderer builds the
@@ -443,7 +444,7 @@ let bridgesTagged = 0, bridgesAuto = 0;
 for (const l of ribbonLines) {
   if (l.dead) continue;
   if (l.rec.flags & 2) bridgesTagged++;
-  else if (crossesWater(l.pts, waterPolys)) { l.rec.flags |= 2; bridgesAuto++; }
+  else if (crossesBig(mask, l.pts, 2)) { l.rec.flags |= 2; bridgesAuto++; }
   if (l.rec.flags & 2) l.ys = deckHeights(l.pts, l.rec.cls <= 7 ? 5 : 3);
   const runs = clipLine(l.pts, !!(l.rec.flags & 2)); // split at the bbox+2km edge; the graph keeps the full way
   for (const run of runs) {
@@ -477,8 +478,7 @@ for (const el of greenEls) {
 // one can cover houses or paths mapped on the bank. Fix the DATA instead of hoping the renderer
 // hides it: drop buildings mostly underwater, elevate ways crossing big water (bridge deck), and
 // clip the submerged runs of ways that merely run along the water. QA re-checks the same mask.
-const mask = makeMask(maskPolys, maskLines);
-let droppedBuildings = 0, elevatedRoads = 0, clippedRoads = 0, clippedRuns = 0, droppedHairpinBridges = 0;
+let droppedBuildings = 0, elevatedRoads = 0, clippedRoads = 0, clippedRuns = 0, droppedHairpinBridges = 0, falseBridges = 0;
 for (const t of tiles.values()) {
   const ox = t.tx * S, oz = t.tz * S;
   // t.b holds tile-local cm — add the tile origin to get mask-frame metres
@@ -504,12 +504,15 @@ for (const t of tiles.values()) {
       r.pts = dp.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM));
       r.ys = deckHeights(dp, H);
     };
-    if (r.flags & 2) { // already tagged/auto-detected: a clipped fragment may carry a flat ys slice
+    if ((r.flags & 2) && crossesBig(mask, p, 2)) { // a tagged/auto bridge that really crosses big water
       if (len < 12 || hairpin(p)) { if (hairpin(p)) droppedHairpinBridges++; continue; } // tiny or doubled-back way: no buildable deck
       if (!r.ys || Math.max(...r.ys) < 120) setDeck(p);
       if (!r.ys || Math.max(...r.ys) < 120) continue; // degenerate fragment — never ship a flat deck
       if (r.ys.length !== r.pts.length / 2) throw new Error(`deck/pts mismatch after repair: ${r.ys.length} vs ${r.pts.length / 2}`);
       outR.push(r); continue;
+    }
+    if (r.flags & 2) { // OSM tag or old auto-flag, but the way only runs beside the water: no deck
+      r.flags &= ~2; r.ys = null; falseBridges++;
     }
     if (crossesBig(mask, p, 2)) { // a real crossing: deck instead of a drowned road
       r.flags |= 2;
@@ -541,6 +544,7 @@ stats.waterRoadsElevated = elevatedRoads;
 stats.waterRoadsClipped = clippedRoads;
 stats.waterRunsKept = clippedRuns;
 stats.droppedHairpinBridges = droppedHairpinBridges;
+stats.falseBridgesCleared = falseBridges;
 
 // A tagged bridge way often includes its approach ramps into the bank, and the corridor sweeps
 // straight through a building left in OSM (the "deck through a house" defect). Drop those
@@ -666,7 +670,7 @@ console.log(`build: landmark check — Old Castle at local (${cx.toFixed(0)}, ${
 console.log(`build: roads merged ${stats.mergedRoads || 0} continuation seams into longer polylines`);
 console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridgesAuto} auto-flagged over water`);
 console.log(`build: pedestrian crossings ${stats.crossings} painted from tagged footways`);
-console.log(`build: dropped ${stats.droppedHairpinBridges} doubled-back bridge ways`);
+console.log(`build: dropped ${stats.droppedHairpinBridges} doubled-back bridge ways, cleared ${stats.falseBridgesCleared} ways tagged as bridges beside (not across) water`);
 console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings, elevated ${stats.waterRoadsElevated} roads, clipped ${stats.waterRoadsClipped} roads into ${stats.waterRunsKept} dry runs`);
 {
   const { qa } = await import('./qa.mjs');
@@ -675,16 +679,21 @@ console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings,
   for (let pass = 0; pass < 4; pass++) {
     rep = await qa('packs/grodno.mpk');
     if (!rep.errors.length) break;
-    let removed = 0;
+    let removed = 0, cleared = 0;
     for (const e of rep.errors) for (const f of (e.fix || [])) {
       const t = tileList[f.tile]; if (!t) continue;
+      const at = (r) => Math.abs(t.tx * S + r.pts[0] / 100 - f.x) < 1 && Math.abs(t.tz * S + r.pts[1] / 100 - f.z) < 1;
+      if (e.clearBridge) { // a bank-running way flagged as a bridge: keep the road, drop the deck
+        for (const r of t.r) if (at(r) && (r.flags & 2)) { r.flags &= ~2; r.ys = null; cleared++; }
+        continue;
+      }
       const before = t.r.length;
-      t.r = t.r.filter((r) => !(Math.abs(t.tx * S + r.pts[0] / 100 - f.x) < 1 && Math.abs(t.tz * S + r.pts[1] / 100 - f.z) < 1));
+      t.r = t.r.filter((r) => !at(r));
       if (t.r.length < before) removed++;
     }
-    if (!removed) break;
+    if (!removed && !cleared) break;
     emitPack();
-    console.log(`build: QA self-heal pass ${pass + 1} removed ${removed} bad road record(s)`);
+    console.log(`build: QA self-heal pass ${pass + 1} removed ${removed} bad road record(s), cleared ${cleared} false bridge deck(s)`);
   }
   rep = await qa('packs/grodno.mpk');
   console.log(`build: QA — ${rep.errors.length} errors, ${rep.warns.length} warns (joints ${rep.stats.roadJoints}, gaps ${rep.stats.roadJointGaps})`);

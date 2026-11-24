@@ -337,6 +337,8 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     }
     // labels: housenumbers ride on building records (header strings), street names on road records.
     // One anchor per record; dedupe() folds repeated way names into one label per world cell.
+    // Street rank follows the road class (0 main, 1 residential, 2 minor) so the overlay can
+    // drop footway/service names before the ones that actually orient you in the city.
     if (!slot && !bundle) for (const L of lods) {
       if (L.kind === 1) for (const b of L.recs) {
         if (!b.num) continue;
@@ -350,8 +352,20 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         for (let k = 0; k + 3 < r.pts.length; k += 2) total += hypot(r.pts[k + 2] - r.pts[k], r.pts[k + 3] - r.pts[k + 1]);
         const half = total / 2;
         let acc = 0, mx = r.pts[0], mz = r.pts[1], my = 1;
+        // a coarse polyline (one point per ~15 m) lets the overlay find the street under the camera
+        // and the houses that belong to it without a new pack field or a second readout pass.
+        const path = [ox + mx / 100, oz + mz / 100];
+        let next = 15;
         for (let k = 0; k + 3 < r.pts.length; k += 2) {
           const sl = hypot(r.pts[k + 2] - r.pts[k], r.pts[k + 3] - r.pts[k + 1]);
+          if (sl > 0 && path.length < 48) {
+            let t = (next - acc) / sl;
+            while (t <= 1 && path.length < 48) {
+              path.push(ox + (r.pts[k] + (r.pts[k + 2] - r.pts[k]) * t) / 100,
+                oz + (r.pts[k + 1] + (r.pts[k + 3] - r.pts[k + 1]) * t) / 100);
+              next += 15; t = (next - acc) / sl;
+            }
+          }
           if (sl > 0 && acc + sl >= half) {
             const t = (half - acc) / sl;
             mx = r.pts[k] + (r.pts[k + 2] - r.pts[k]) * t;
@@ -361,7 +375,10 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
           }
           acc += sl;
         }
-        labels.push({ x: ox + mx / 100, z: oz + mz / 100, y: my, text: PK.h.strings[r.name] || '', kind: 1, priority: 0 });
+        const li = r.pts.length - 2;
+        path.push(ox + r.pts[li] / 100, oz + r.pts[li + 1] / 100);
+        labels.push({ x: ox + mx / 100, z: oz + mz / 100, y: my, text: PK.h.strings[r.name] || '', kind: 1, priority: 0,
+          rank: r.cls <= 4 ? 0 : r.cls <= 6 ? 1 : 2, path });
       }
     }
     // buildings: one type per tint bucket; LODs run near → far (the cull pass switches up with distance),

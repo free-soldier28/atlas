@@ -101,10 +101,10 @@ body:not(.l) #ld { opacity: 0; visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 /* label overlay: house numbers and street names projected from the world each frame */
 #labs { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
-.lab { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 2px 6px; border-radius: 5px;
-  font: 600 11px/1.25 system-ui, sans-serif; color: #fff; background: #121614b8;
-  box-shadow: 0 1px 3px #0006; text-shadow: 0 1px 1px #0008; }
-.lab.street { font-size: 12px; color: #d9ecff; background: #1a2834c9; }
+.lab { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 0; border-radius: 0;
+  font: 600 11px/1.25 system-ui, sans-serif; color: #fff; background: none;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000b; }
+.lab.street { padding: 1px 5px; border-radius: 4px; font-size: 11px; color: #d9ecff; background: #1a2834a8; }
 </style>
 </head>
 <body class=l>
@@ -138,6 +138,7 @@ body:not(.l) #ld { opacity: 0; visibility: hidden; }
   <p class=sw><span>House numbers</span><button id=ln>On</button></p>
   <p class=sw><span>Walk through buildings</span><button id=gw>Off</button></p>
   <p class=sw><span>Street names</span><button id=ls>On</button></p>
+  <p class=sw><span>Label density</span><button id=lz>Balanced</button></p>
   <p class=sw><span>Stats</span><button id=hb>Off</button></p>
   <p class=lb>Detail</p>
   <p id=q><span>Level</span><button>Low</button><button>Medium</button><button>High</button></p>

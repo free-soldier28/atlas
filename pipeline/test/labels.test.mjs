@@ -11,7 +11,7 @@ import { MPKBuilder } from '../lib/pack.mjs';
 
 const ROOT = path.join(fileURLToPath(import.meta.url), '..', '..', '..');
 const labelSrc = readFileSync(path.join(ROOT, 'source', 'src', 'labels.js'), 'utf8');
-const { dedupe, place } = new Function(labelSrc + '\nreturn { dedupe, place };')();
+const { dedupe, place, focusLabels } = new Function(labelSrc + '\nreturn { dedupe, place, focusLabels };')();
 const E = (text, kind, x, z, dist = 10) => ({ text, kind, x, z, priority: kind === 1 ? 0 : 1, dist });
 
 test('dedupe: one label per street name per world cell, numbers stay per building', () => {
@@ -42,6 +42,41 @@ test('place: per-layer quota, max cap, off-screen and behind-camera rejection', 
   assert.equal(n.length, 0, 'behind-camera entries are skipped');
 });
 
+test('place: one street name per view, the closest instance wins', () => {
+  const entries = [E('Same', 1, 0, 0, 90), E('Same', 1, 40, 0, 20), E('Other', 1, 1200, 0, 120)];
+  const out = place(entries, (e) => [e.dist * 10, 300, e.dist], { W: 1280, H: 800, unique: true });
+  assert.deepEqual(out.map((e) => e.text), ['Same', 'Other'], 'repeated name folded, nearest kept');
+  const all = place(entries, (e) => [e.dist * 10, 300, e.dist], { W: 1280, H: 800 });
+  assert.equal(all.length, 3, 'without unique the old behaviour is unchanged');
+});
+
+test('place: main-road ranks win a contested spot over minor roads', () => {
+  const entries = [{ ...E('Service', 1, 0, 0, 10), rank: 2 }, { ...E('Main', 1, 0, 0, 10), rank: 0 }];
+  const out = place(entries, () => [300, 300, 10], { W: 1280, H: 800 });
+  assert.deepEqual(out.map((e) => e.text), ['Main'], 'lower rank placed first');
+});
+
+test('focus: the street under the camera and only the houses on it survive', () => {
+  const entries = [
+    { ...E('My St', 1, 50, 0, 10), path: [0, 0, 100, 0] },
+    { ...E('Far St', 1, 50, 200, 10), path: [0, 200, 100, 200] },
+    E('10', 0, 20, 5, 10), E('20', 0, 20, 80, 10),
+  ];
+  const out = focusLabels(entries, { x: 25, z: 0, fx: 1, fz: 0 });
+  assert.deepEqual(out.map((e) => e.text).sort(), ['10', 'My St'], 'other street and off-street house dropped');
+});
+
+test('focus: a couple of nearest streets in the camera cone may join, not the ones behind', () => {
+  const entries = [
+    { ...E('Here', 1, 5, 0, 10), path: [0, 0, 10, 0] },
+    { ...E('Ahead', 1, 80, 0, 10), path: [70, 0, 90, 0] },
+    { ...E('Behind', 1, -80, 0, 10), path: [-90, 0, -70, 0] },
+  ];
+  const out = focusLabels(entries, { x: 0, z: 0, fx: 1, fz: 0 });
+  assert.deepEqual(out.map((e) => e.text).sort(), ['Ahead', 'Here'], 'behind-camera street skipped');
+  assert.equal(focusLabels(entries, { x: 0, z: 500, fx: 0, fz: -1 }).length, 0, 'nothing in range → nothing shown');
+});
+
 test('pack roundtrip: housenumber string survives; legacy packs decode safely', async () => {
   const E2 = await engine();
   const pts = [240, 246, 270, 246, 270, 266, 240, 266].map((v) => v * 100);
@@ -59,6 +94,7 @@ test('pack roundtrip: housenumber string survives; legacy packs decode safely', 
   assert.ok(Math.abs(nums[0].y - 16.6) < 0.01, 'number sits above the roof');
   assert.equal(streets.length, 1, 'one street label');
   assert.equal(streets[0].text, 'Main Street');
+  assert.equal(streets[0].rank, 1, 'residential street carries road rank');
   assert.ok(Math.abs(streets[0].x - 270) < 1, 'street label sits at the road midpoint');
   // a pack written without the labels flag (older format) must decode num = 0
   delete P.h.labels;
@@ -68,8 +104,8 @@ test('pack roundtrip: housenumber string survives; legacy packs decode safely', 
 
 test('label overlay uses the unjittered matrix and writes whole pixels only on change', () => {
   const src = readFileSync(path.join(ROOT, 'source', 'src', 'main.js'), 'utf8');
-  assert.match(src, /updateLabels\(PVP\);/, 'TAA jitter must not move DOM labels');
-  assert.doesNotMatch(src, /updateLabels\(U\);/, 'the jittered view matrix is for pixels, not text');
+  assert.match(src, /updateLabels\(PVP,/, 'TAA jitter must not move DOM labels');
+  assert.doesNotMatch(src, /updateLabels\(U,/, 'the jittered view matrix is for pixels, not text');
   assert.match(src, /Math\.round\(e\.sx\)\}px/, 'positions snap to whole pixels');
   assert.match(src, /if \(d\._tf !== tf\)/, 'no DOM write when the rounded position is unchanged');
   assert.doesNotMatch(src, /labTick/, 'labels refresh every frame, not in 4-frame jumps');
@@ -86,4 +122,20 @@ test('both label layers default on, have query overrides and an independent togg
   assert.match(html, /id=ln/, 'house-number drawer button');
   assert.match(html, /id=ls/, 'street-name drawer button');
   assert.match(html, /id=labs/, 'overlay container');
+  assert.match(html, /id=lz/, 'label density drawer button');
+});
+
+test('density presets gate label range, quota and repeated street names', () => {
+  const main = readFileSync(path.join(ROOT, 'source', 'src', 'main.js'), 'utf8');
+  assert.match(main, /const LAB_MODES =/, 'three density presets');
+  assert.match(main, /farStreet\[e\.rank \|\| 0\]/, 'street range follows road rank');
+  assert.match(main, /unique: LAB\.unique/, 'repeated street names folded by preset');
+  assert.match(main, /max: LAB\.max/, 'preset drives the global cap');
+  assert.match(main, /window\.__labels = setLabelMode/, 'preset has a runtime setter');
+  const world = readFileSync(path.join(ROOT, 'source', 'src', 'world.js'), 'utf8');
+  assert.match(world, /rank: r\.cls <= 4 \? 0 : r\.cls <= 6 \? 1 : 2/, 'rank comes from road class');
+  assert.match(world, /const path = \[ox \+ mx \/ 100/, 'street labels carry polyline samples');
+  assert.match(labelSrc, /const focusLabels = /, 'focus filter is a pure helper');
+  assert.match(main, /focusLabels\(cand,/, 'focus mode filters candidates in the overlay');
+  assert.match(main, /LAB_ORDER = \['full', 'balanced', 'focus', 'minimal'\]/, 'focus is a selectable preset');
 });

@@ -73,13 +73,14 @@ const W_FX2 = /*wgsl*/`
   let N = normalize(vec3f(-sl.x, 1., -sl.y)); let nv = max(dot(N, V), 1e-3);
   let F = .02 + .98 * pow(1. - nv, 5.);
   // under the surface: the scene behind, bent and coloured by the water depth
-  let zs = viewZ(suv); let zw = 1. / i.clip.w; let thick0 = max(zs - zw, 0.); // fragment w is 1 / view depth
+  // clip.w is view depth in metres — the same unit as viewZ (toUV uses it for SSR too).
+  let zs = viewZ(suv); let zw = max(i.clip.w, .1); let thick0 = max(zs - zw, 0.);
   var uv2 = suv + N.xz * vec2f(1., -1.) * .035 * sat(thick0 * .6) / (1. + dist * .02);
   var z2 = viewZ(uv2); if (z2 < zw) { uv2 = suv; z2 = zs; }
   let bed = worldAt(uv2, z2); let path = max(z2 - zw, 0.) * dist / zw; var depth = max(p.y - bed.y, 0.);
   // inland bodies sit on the flat pack ground (the lawn plane): their real depth reads ~0, so the
   // bed would show through as a teal stain on grass. Rivers and ponds get a body depth instead.
-  if (kind == 0u) { depth = max(depth, 6.); }
+  if (kind == 0u) { depth = max(depth, 3.); }
   var under = textureSampleLevel(tScene, sLin, uv2, 0.).rgb; var sig: vec3f; var scat: vec3f; var sA = .2;
   // ambient in the body: night keeps the water black glass (the sky table is dim, but the moon's share is cut too)
   let amb = (skyLut(vec3f(0., 1., 0.)) * 1.6 + view.sunc.rgb * .12) * mix(1., .35, view.night.x);
@@ -90,9 +91,9 @@ const W_FX2 = /*wgsl*/`
     // from the same palette as the shore, broken up at two scales so ripples still reveal a bottom.
     let bedN = textureSampleGrad(tNoiseA, sRep, p.xz * .55, dx * .55, dy * .55);
     let grit = textureSampleGrad(tNoiseA, sRep, p.xz * 4.3, dx * 4.3, dy * 4.3);
-    under = mix(vec3f(.075, .077, .058), vec3f(.185, .17, .135), bedN.r * .75 + grit.g * .25) * (.6 + .4 * shw);
+    under = mix(vec3f(.035, .085, .095), vec3f(.105, .18, .2), bedN.r * .75 + grit.g * .25) * (.6 + .4 * shw);
   }
-  if (kind == 0u) { sig = vec3f(.6, .12, .08); scat = vec3f(.002, .05, .045) * amb; sA = .4; }
+  if (kind == 0u) { sig = vec3f(.35, .12, .08); scat = vec3f(.006, .055, .07) * amb; sA = .3; }
   else if (kind == 1u) { sig = vec3f(2.4, 3., 1.3); scat = vec3f(.011, .006, .12) * (.35 + .65 * shw); sA = 2.5; }
   else { sig = vec3f(.4, .08, .06); scat = vec3f(.001, .012, .028) * amb * (1. + 1.4 * sat(p.y * 2. + .15)); sA = .1; } // crests let more light through
   under = under * exp(-sig * (path + depth * .6)) + scat * (1. - exp(-sA * path));

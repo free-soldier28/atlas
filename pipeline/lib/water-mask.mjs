@@ -3,6 +3,7 @@
 // ribbon alone used to drown houses and footways even though every polygon test passed.
 // Pure functions over flat [x,z,...] arrays in one shared metric frame; grid-indexed so 33k road
 // records × 228 lines stays cheap.
+import { crossesWater } from './bridge.mjs';
 
 const CELL = 100; // m — spatial bucket for water geometry
 const ck = (cx, cz) => cx + ',' + cz;
@@ -77,19 +78,43 @@ export const submerged = (mask, pts, margin = 0) => {
   return (wet + 1) / (n + 1);
 };
 
-// does this way actually cross BIG water (a lake/river poly or a wide river ribbon)?
+// Does this way actually CROSS big water? A bank-running or bank-grazing way only touches it, and
+// used to be elevated into a "bridge" along dry land: crossesBig was a single-sample distance test.
+// Polygons use the strict deep-inside/edge-crossing test from bridge.mjs; ribbons additionally need
+// a centreline crossing at a real angle (a way 2° from the river is an embankment, not a bridge).
 export const crossesBig = (mask, pts, margin = 0) => {
+  if (crossesWater(pts, mask.polys.filter((p) => p.big))) return true;
+  const side = (p, x, z) => {
+    const ux = p.pts[2] - p.pts[0], uz = p.pts[3] - p.pts[1];
+    return (ux * (z - p.pts[1]) - uz * (x - p.pts[0])) / (Math.hypot(ux, uz) || 1);
+  };
+  const samples = [];
   for (let i = 0; i + 1 < pts.length; i += 2) {
     const ax = pts[i], az = pts[i + 1], bx = pts[i + 2], bz = pts[i + 3];
-    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 8));
-    for (let k = 0; k <= n; k++) {
-      const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n;
-      if (!inWater(mask, x, z, margin)) continue;
-      for (const p of near(mask, x, z)) {
-        if (!p.big) continue;
-        if (p.seg && distSeg(x, z, p.pts[0], p.pts[1], p.pts[2], p.pts[3]) <= p.hw + margin) return true;
-        if (!p.seg && pip(x, z, p.pts)) return true;
-      }
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 6));
+    for (let k = 0; k <= n; k++) samples.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n]);
+  }
+  const stats = new Map();
+  for (const [x, z] of samples) for (const p of near(mask, x, z)) {
+    if (!p.seg || !p.big) continue;
+    const s = side(p, x, z);
+    let st = stats.get(p); if (!st) stats.set(p, st = { p, min: Infinity, max: -Infinity });
+    st.min = Math.min(st.min, s); st.max = Math.max(st.max, s);
+  }
+  for (const st of stats.values()) {
+    const p = st.p, half = p.hw + margin;
+    // approach one bank and leave the other: a fragment wholly along the band fails here
+    if (st.min > -half || st.max < half) continue;
+    const ux = p.pts[2] - p.pts[0], uz = p.pts[3] - p.pts[1], ul = Math.hypot(ux, uz);
+    for (let k = 1; k < samples.length; k++) {
+      const [ax, az] = samples[k - 1], [bx, bz] = samples[k];
+      const s1 = side(p, ax, az), s2 = side(p, bx, bz);
+      if (s1 * s2 > 0 || (s1 === 0 && s2 === 0)) continue;
+      const vx = bx - ax, vz = bz - az, vl = Math.hypot(vx, vz);
+      if (vl < .01 || Math.abs(ux * vz - uz * vx) / (ul * vl) < .2) continue; // < ~11°: along the bank
+      const t = s1 / (s1 - s2 || 1), px = ax + vx * t, pz = az + vz * t;
+      const along = ((px - p.pts[0]) * ux + (pz - p.pts[1]) * uz) / (ul * ul);
+      if (along >= -.05 && along <= 1.05) return true;
     }
   }
   return false;

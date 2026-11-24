@@ -32,12 +32,18 @@ test('submerged: footprint fraction, not just a single vertex', () => {
 test('crossesBig: a segment crossing water between dry endpoints is caught', () => {
   const road = [120, 80, 120, 90, 120, 160, 120, 200]; // crosses the lake, ends dry
   assert.equal(crossesBig(mask, road), true);
-  const dryRoad = [200, 300, 200, 320]; // inside the 12 m river ribbon — a real crossing now
+  const dryRoad = [200, 286, 200, 314]; // dry banks either side of a 12 m river ribbon
   assert.equal(crossesBig(mask, dryRoad), true, 'a 12 m river ribbon needs a bridge');
   const stream = makeMask([], [{ pts: [0, 300, 400, 300], hw: 2 }]); // 4 m stream
   assert.equal(crossesBig(stream, dryRoad.slice(0, 0).concat([200, 298, 200, 302])), false, 'a 4 m stream is step-over water');
   const alongBank = [100, 90, 150, 90];
   assert.equal(crossesBig(mask, alongBank), false);
+  // the defect class from the screenshots: a way 2.8° from a 12 m river, 1 m outside its bank,
+  // used to be elevated into a "bridge" along dry land (crossesBig was a proximity test).
+  const river = makeMask([], [{ pts: [0, 300, 400, 300], hw: 6 }]);
+  assert.equal(crossesBig(river, [0, 307, 180, 309], 2), false, 'parallel bank way is not a crossing');
+  assert.equal(crossesBig(river, [200, 286, 200, 314], 2), true, 'perpendicular crossing still needs a deck');
+  assert.equal(crossesBig(river, [200, 306, 380, 306], 2), false, 'a way inside the ribbon but along it is not a crossing');
 });
 
 test('QA errors carry fix metadata and build-city self-heals before failing', () => {

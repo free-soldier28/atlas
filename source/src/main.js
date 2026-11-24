@@ -94,6 +94,32 @@ try { const nq = QP.get('num'), sq = QP.get('street');
   showNum = nq !== null ? +(nq === '1') : AUTO ? 1 : localStorage.atlasNum !== '0';
   showStreet = sq !== null ? +(sq === '1') : AUTO ? 1 : localStorage.atlasStreet !== '0';
 } catch {}
+// density presets: Full keeps the old flood of text, Balanced (default) shows each street name
+// once and only nearby house numbers, Minimal keeps main streets only. ?labels= forces a preset.
+const LAB_MODES = {
+  full:     { num: 1, street: 1, farStreet: [300, 300, 300], farNum: 220, max: 110, quota: { 1: 34 },         unique: 0 },
+  balanced: { num: 1, street: 1, farStreet: [280, 190, 100], farNum: 95, max: 48, quota: { 1: 14, 0: 18 }, unique: 1 },
+  focus:    { num: 1, street: 1, farStreet: [320, 320, 320], farNum: 110, max: 40, quota: { 1: 3, 0: 20 }, unique: 1, focus: 1 },
+  minimal:  { num: 0, street: 1, farStreet: [220, 0, 0],     farNum: 0,   max: 16,  quota: { 1: 10, 0: 0 },  unique: 1 },
+};
+const LAB_ORDER = ['full', 'balanced', 'focus', 'minimal'];
+let labMode = 'balanced';
+let LAB = LAB_MODES.balanced;
+try {
+  const mq = QP.get('labels');
+  if (LAB_MODES[mq]) labMode = mq;
+  else if (!AUTO && LAB_MODES[localStorage.atlasLabels]) labMode = localStorage.atlasLabels;
+  LAB = LAB_MODES[labMode];
+  if (LAB_MODES[mq]) { showNum = LAB.num; showStreet = LAB.street; } // ?labels wins over saved layers
+  else if (!AUTO) {
+    if (localStorage.atlasNum !== undefined && +(localStorage.atlasNum === '1') !== LAB.num) labMode = 'custom';
+    if (localStorage.atlasStreet !== undefined && +(localStorage.atlasStreet === '1') !== LAB.street) labMode = 'custom';
+  }
+  if (QP.get('num') !== null || QP.get('street') !== null) labMode = 'custom';
+  if (labMode === 'custom') LAB = LAB_MODES.balanced;
+  if (QP.get('num') !== null) showNum = +(QP.get('num') === '1');
+  if (QP.get('street') !== null) showStreet = +(QP.get('street') === '1');
+} catch {}
 // debug: walk through buildings while keeping ground/water collision. ?ghost=1|0, drawer row.
 let ghost = 0;
 try { const gq = QP.get('ghost'); ghost = gq !== null ? +(gq === '1') : AUTO ? 0 : +(localStorage.atlasGhost === '1'); } catch {}
@@ -716,7 +742,7 @@ function render() {
   if (slot) { e.resolveQuerySet(qs, 0, NP * 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, NP * 16); }
   submitList[0] = e.finish(); Q.submit(submitList);
   if (slot) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
-  updateLabels(PVP); // the unjittered matrix: TAA's per-frame sub-pixel offset must not move labels
+  updateLabels(PVP, F[CX], F[CY], F[CZ], U[O_FWD], U[O_FWD + 2]); // PVP is the unjittered matrix; camera state comes from the full uniform buffer
   F[FRAME] = fr + 1; F[RESET] = 0;
 }
 
@@ -726,24 +752,27 @@ function render() {
 const LAB_LAYER = $('labs'), LAB_POOL = [];
 let labState = [];
 window.__labelState = () => labState.slice(); // dev.js __shot composites these into stills
-const updateLabels = (U) => {
+const updateLabels = (U, camX, camY, camZ, fwdX, fwdZ) => {
   if (!LAB_LAYER) return;
-  const w = innerWidth, h = innerHeight, cx = U[O_CAM], cy = U[O_CAM + 1], cz = U[O_CAM + 2];
+  const w = innerWidth, h = innerHeight, cx = camX, cy = camY, cz = camZ;
   const cand = [];
   for (const e of Wd.labels) {
     if (!(e.kind ? showStreet : showNum)) continue;
     const dx = e.x - cx, dy = e.y - cy, dz = e.z - cz, d2 = dx * dx + dy * dy + dz * dz;
-    const far = e.kind ? 300 : 220;
-    if (d2 > far * far) continue;
+    const far = e.kind ? LAB.farStreet[e.rank || 0] : LAB.farNum;
+    if (!(far > 0) || d2 > far * far) continue;
     cand.push({ ...e, dist: Math.sqrt(d2) });
   }
-  const chosen = place(cand, (e) => {
+  let shown = cand;
+  if (LAB.focus) shown = focusLabels(cand, { x: cx, z: cz, fx: fwdX, fz: fwdZ });
+  const chosen = place(shown, (e) => {
     const cw = U[0] * e.x + U[4] * e.y + U[8] * e.z + U[12];
     const cwy = U[1] * e.x + U[5] * e.y + U[9] * e.z + U[13];
     const cww = U[3] * e.x + U[7] * e.y + U[11] * e.z + U[15];
     if (cww <= 1) return null;
     return [(cw / cww * 0.5 + 0.5) * w, (0.5 - cwy / cww * 0.5) * h, e.dist];
-  }, { W: w, H: h, max: 110, cellW: 66, cellH: 26, pad: 3, quota: { 1: 34 }, widthOf: (t) => t.length * 6.6 + 14 });
+  }, { W: w, H: h, max: LAB.max, cellW: 66, cellH: 26, pad: 3, quota: LAB.quota, unique: LAB.unique,
+    widthOf: (t) => t.length * 6.6 + 14 });
   labState = chosen.map((e) => ({ text: e.text, x: e.sx, y: e.sy, kind: e.kind }));
   for (let i = 0; i < chosen.length; i++) {
     let d = LAB_POOL[i];
@@ -856,10 +885,18 @@ window.__windows = setWindows; // headless probes / tests
 // the two label layers toggle independently — both feed the same DOM overlay
 const numUI = () => { const r = $('ln'); if (r) { r.textContent = showNum ? 'On' : 'Off'; r.className = showNum ? 'on' : ''; } };
 const streetUI = () => { const r = $('ls'); if (r) { r.textContent = showStreet ? 'On' : 'Off'; r.className = showStreet ? 'on' : ''; } };
-const setNum = (v) => { showNum = v === undefined ? 1 - showNum : +!!v; if (!AUTO) { try { localStorage.atlasNum = showNum ? '1' : '0'; } catch {} } numUI(); return showNum; };
-const setStreet = (v) => { showStreet = v === undefined ? 1 - showStreet : +!!v; if (!AUTO) { try { localStorage.atlasStreet = showStreet ? '1' : '0'; } catch {} } streetUI(); return showStreet; };
+const labUI = () => { const r = $('lz'); if (r) { r.textContent = labMode === 'custom' ? 'Custom' : labMode === 'full' ? 'Full' : labMode === 'minimal' ? 'Minimal' : labMode === 'focus' ? 'Focus' : 'Balanced'; r.className = labMode === 'custom' ? '' : 'on'; } };
+const setNum = (v) => { showNum = v === undefined ? 1 - showNum : +!!v; labMode = 'custom'; if (!AUTO) { try { localStorage.atlasNum = showNum ? '1' : '0'; localStorage.atlasLabels = 'custom'; } catch {} } numUI(); labUI(); return showNum; };
+const setStreet = (v) => { showStreet = v === undefined ? 1 - showStreet : +!!v; labMode = 'custom'; if (!AUTO) { try { localStorage.atlasStreet = showStreet ? '1' : '0'; localStorage.atlasLabels = 'custom'; } catch {} } streetUI(); labUI(); return showStreet; };
+const setLabelMode = (m) => {
+  if (!LAB_MODES[m]) return labMode;
+  labMode = m; LAB = LAB_MODES[m]; showNum = LAB.num; showStreet = LAB.street;
+  if (!AUTO) { try { localStorage.atlasLabels = m; localStorage.atlasNum = showNum ? '1' : '0'; localStorage.atlasStreet = showStreet ? '1' : '0'; } catch {} }
+  numUI(); streetUI(); labUI(); return labMode;
+};
 window.__numbers = setNum;
 window.__streets = setStreet;
+window.__labels = setLabelMode;
 // buildings-only collision toggle (the Collision button still gates all collision)
 const ghostUI = () => { const r = $('gw'); if (r) { r.textContent = ghost ? 'On' : 'Off'; r.className = ghost ? 'on' : ''; } };
 const setGhost = (v) => { ghost = v === undefined ? 1 - ghost : +!!v; setBoxCollision(!ghost); if (!AUTO) { try { localStorage.atlasGhost = ghost ? '1' : '0'; } catch {} } ghostUI(); return ghost; };
@@ -890,6 +927,7 @@ $('cb').onclick = () => { solid = !solid; colUI(); };
 if ($('wi')) $('wi').onclick = () => setWindows();
 if ($('ln')) $('ln').onclick = () => setNum();
 if ($('ls')) $('ls').onclick = () => setStreet();
+if ($('lz')) $('lz').onclick = () => setLabelMode(LAB_ORDER[(LAB_ORDER.indexOf(labMode === 'custom' ? 'balanced' : labMode) + 1) % LAB_ORDER.length]);
 if ($('gw')) $('gw').onclick = () => setGhost();
 $('nt').onclick = () => setNight(1 - night);
 $('lc').onclick = () => locate();
@@ -965,7 +1003,7 @@ dnB[0].onclick = () => setNight(0); dnB[1].onclick = () => setNight(1);
 dnB[night ? 1 : 0].className = 'on';
 const ntB = $('nt'); ntB.textContent = night ? '☀' : '🌙'; ntB.title = night ? 'Day (N)' : 'Night (N)'; // the stack glyph mirrors the profile
 $('gb').onclick = gpsToggle; // the drawer's GPS button toggles like the key
-colUI(); winUI(); numUI(); streetUI(); ghostUI();
+colUI(); winUI(); numUI(); streetUI(); labUI(); ghostUI();
 
 // start camera: the pack's first viewpoint. Only the locate button / G moves it to a GPS fix.
 lookAt(...POSES[0]);

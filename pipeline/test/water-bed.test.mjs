@@ -26,3 +26,9 @@ test('other water kinds keep refracting the scene behind', () => {
   assert.match(body, /if \(kind == 1u\) \{ sig =/, 'light-liquid profile intact');
   assert.match(body, /else \{ sig = vec3f\(\.4, \.08, \.06\)/, 'sea profile intact');
 });
+
+test('fsWater uses view-depth units for the water surface depth', () => {
+  const body = src.slice(src.indexOf('@fragment fn fsWater'));
+  assert.match(body, /let zw = max\(i\.clip\.w, \.1\)/, 'clip.w is view depth in metres, like viewZ');
+  assert.doesNotMatch(body, /zw = 1\. \/ i\.clip\.w/, 'the old reciprocal made absorption erase the bed');
+});

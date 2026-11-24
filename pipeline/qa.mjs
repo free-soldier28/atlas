@@ -97,6 +97,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     .map((w) => ({ pts: w.pts.map((v, k) => (k % 2 ? w.oz : w.ox) + v / 100), area: area(w.pts) / 1e4 }));
   let nBridges = 0;
   for (const r of W.roads) {
+    const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
     if (r.flags & 2) {
       nBridges++;
       if (!r.ys || r.ys.length !== r.pts.length / 2) errors.push({ check: 'bridges', msg: `bridge record without per-vertex deck heights (tile ${r.tile})` });
@@ -104,9 +105,11 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
         msg: `bridge deck peaks at ${(Math.max(...r.ys) / 100).toFixed(1)} m — too low for a water crossing (tile ${r.tile})`,
         fix: [{ tile: r.tile, x: (r.ox + r.pts[0] / 100), z: (r.oz + r.pts[1] / 100) }] });
       else if (Math.min(...r.ys) < 0) errors.push({ check: 'bridges', msg: `negative deck height in ys (tile ${r.tile})` });
+      else if (!crossesBig(mask, g, 2)) errors.push({ check: 'bridges',
+        msg: `bridge deck does not cross big water (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)}) — bank-running way flagged as a bridge`,
+        fix: [{ tile: r.tile, x: g[0], z: g[1] }], clearBridge: true });
       continue;
     }
-    const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
     if (crossesBig(mask, g, 0.5)) errors.push({ check: 'bridges',
       msg: `road crosses big water without a bridge flag (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)})`,
       fix: [{ tile: r.tile, x: g[0], z: g[1] }] });
