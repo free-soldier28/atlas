@@ -6,6 +6,9 @@
 
 const CELL = 100; // m — spatial bucket for water geometry
 const ck = (cx, cz) => cx + ',' + cz;
+// a footprint with a third of its sampled points in visible water is a house standing in the
+// stream — the renderer must not draw the river through its walls
+export const WET_BUILDING = 0.35;
 
 const pip = (x, z, p) => {
   let inside = false;
@@ -37,7 +40,9 @@ export const makeMask = (polys, lines) => {
   }
   for (const l of lines) {
     for (let i = 0; i + 3 < l.pts.length; i += 2) {
-      const s = { seg: true, pts: [l.pts[i], l.pts[i + 1], l.pts[i + 2], l.pts[i + 3]], hw: l.hw, big: l.hw >= 25 };
+      // a 12 m river ribbon is a real river: a road crossing it needs a deck, just like a lake.
+      // 4 m streams (hw 2) stay small — footpaths may step over those.
+      const s = { seg: true, pts: [l.pts[i], l.pts[i + 1], l.pts[i + 2], l.pts[i + 3]], hw: l.hw, big: l.hw >= 6 };
       L.push(s);
       add(Math.min(s.pts[0], s.pts[2]) - l.hw, Math.min(s.pts[1], s.pts[3]) - l.hw,
         Math.max(s.pts[0], s.pts[2]) + l.hw, Math.max(s.pts[1], s.pts[3]) + l.hw, s);

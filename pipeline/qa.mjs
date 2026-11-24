@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
-import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
+import { makeMask, submerged, inWater, crossesBig, WET_BUILDING } from './lib/water-mask.mjs';
 import { makeDeck, buildingHitsDeck } from './lib/bridge-conflicts.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -77,7 +77,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     W.lines.map((l) => ({ pts: toWorld(l), hw: l.hw })));
   let wetBuildings = 0, wetRoads = 0; const wetSamples = [], wetFix = [];
   for (const b of W.blds) {
-    if (submerged(mask, toWorld(b)) >= 0.6) { wetBuildings++; if (wetSamples.length < 4) wetSamples.push('building ' + b.osmId); }
+    if (submerged(mask, toWorld(b)) >= WET_BUILDING) { wetBuildings++; if (wetSamples.length < 4) wetSamples.push('building ' + b.osmId); }
   }
   for (const r of W.roads) {
     if (r.flags & 2) continue; // an elevated bridge deck over water is correct

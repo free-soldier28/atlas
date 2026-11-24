@@ -32,8 +32,10 @@ test('submerged: footprint fraction, not just a single vertex', () => {
 test('crossesBig: a segment crossing water between dry endpoints is caught', () => {
   const road = [120, 80, 120, 90, 120, 160, 120, 200]; // crosses the lake, ends dry
   assert.equal(crossesBig(mask, road), true);
-  const dryRoad = [200, 300, 200, 320]; // inside the ribbon but not a big poly/river? ribbon hw 12 < 25
-  assert.equal(crossesBig(mask, dryRoad), false, 'thin ribbons are not bridge-worthy');
+  const dryRoad = [200, 300, 200, 320]; // inside the 12 m river ribbon — a real crossing now
+  assert.equal(crossesBig(mask, dryRoad), true, 'a 12 m river ribbon needs a bridge');
+  const stream = makeMask([], [{ pts: [0, 300, 400, 300], hw: 2 }]); // 4 m stream
+  assert.equal(crossesBig(stream, dryRoad.slice(0, 0).concat([200, 298, 200, 302])), false, 'a 4 m stream is step-over water');
   const alongBank = [100, 90, 150, 90];
   assert.equal(crossesBig(mask, alongBank), false);
 });

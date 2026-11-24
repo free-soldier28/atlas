@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
 import { crossesWater, deckHeights, ysAt } from './lib/bridge.mjs';
 import { makeDeck, buildingHitsDeck, redundantDeck } from './lib/bridge-conflicts.mjs';
-import { makeMask, submerged, inWater, crossesBig } from './lib/water-mask.mjs';
+import { makeMask, submerged, inWater, crossesBig, WET_BUILDING } from './lib/water-mask.mjs';
 import { collectCrossings } from './lib/crossings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, '..');
@@ -483,7 +483,7 @@ for (const t of tiles.values()) {
   const ox = t.tx * S, oz = t.tz * S;
   // t.b holds tile-local cm — add the tile origin to get mask-frame metres
   const toM = (pts) => { const p = new Array(pts.length); for (let i = 0; i < pts.length; i += 2) { p[i] = ox + pts[i] / CM; p[i + 1] = oz + pts[i + 1] / CM; } return p; };
-  t.b = t.b.filter((b) => { const wet = submerged(mask, toM(b.pts)); if (wet >= 0.6) { droppedBuildings++; return false; } return true; });
+  t.b = t.b.filter((b) => { const wet = submerged(mask, toM(b.pts)); if (wet >= WET_BUILDING) { droppedBuildings++; return false; } return true; });
   const outR = [];
   for (const r of t.r) {
     const p = toM(r.pts);
