@@ -261,7 +261,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       }
       if (!inside || taken.some((q) => (q[0] - x) ** 2 + (q[1] - z) ** 2 < 144)) continue;
       taken.push([x, z]);
-      const h = 6 + rnd() * 5, rr = 2.2 + rnd() * 1.2;
+      const h = 9 + rnd() * 6, rr = 3.4 + rnd() * 1.8;
       trunk.fr = crown.fr = [x, 0, z, 1, 0, 1];
       trunk.lathe([[0.28, 0], [0.2, h * .6]], { seg: 4 });
       crown.lathe([[0, h * .42], [rr, h * .62], [0, h * 1.05]], { seg: 5 });
