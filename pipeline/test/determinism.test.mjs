@@ -10,12 +10,14 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hasCache } from './helpers.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PACK = path.join(root, 'packs/grodno.mpk');
 const sha = (f) => createHash('sha256').update(readFileSync(f)).digest('hex');
 
-test('determinism: two build-city runs → identical hashes, pack left byte-identical', () => {
+test('determinism: two build-city runs → identical hashes, pack left byte-identical', (t) => {
+  if (!hasCache('roads') || !hasCache('buildings')) return t.skip('OSM cache not present; run pipeline/fetch.mjs');
   const keep = mkdtempSync(path.join(tmpdir(), 'atlas-det-'));
   const saved = path.join(keep, 'grodno.mpk');
   copyFileSync(PACK, saved); // the original, to restore + compare against

@@ -53,5 +53,5 @@ test('QA errors carry fix metadata and build-city self-heals before failing', ()
   const build = readFileSync(path.join(ROOT, 'pipeline', 'build-city.mjs'), 'utf8');
   assert.match(build, /const emitPack = \(\) =>/, 'emit must be repeatable');
   assert.match(build, /for \(let pass = 0; pass < 4; pass\+\+\)/, 'QA self-heal loop present');
-  assert.match(build, /emitPack\(\);\n\s*console\.log\(`build: QA self-heal/, 'a fix re-emits the pack');
+  assert.match(build, /emitPack\(\);\s*console\.log\(`build: QA self-heal/, 'a fix re-emits the pack');
 });

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { openPack, readCache } from './helpers.mjs';
+import { openPack, readCache, hasCache } from './helpers.mjs';
 
 const isClosed = (g) => g && g.length >= 4 && g[0].lat === g[g.length - 1].lat && g[0].lon === g[g.length - 1].lon;
 // a ring the builder can actually emit: closed and every point present (no clipped nulls)
@@ -15,7 +15,8 @@ const countKind = (P, kind) => {
   return n;
 };
 
-test('buildings: pack records == closed building ways + relation outer rings (holes logged)', async () => {
+test('buildings: pack records == closed building ways + relation outer rings (holes logged)', async (t) => {
+  if (!hasCache('buildings') || !hasCache('grodno-stats')) return t.skip('OSM cache not present; run pipeline/fetch.mjs');
   const P = await openPack();
   const els = readCache('buildings');
   const closed = els.filter((e) => e.type === 'way' && usable(e));
@@ -44,7 +45,8 @@ test('buildings: pack records == closed building ways + relation outer rings (ho
   assert.ok(closed.length > 30000, 'closed way count far below the measured Overpass total');
 });
 
-test('roads: every cached highway way appears in the pack (recs ≥ 95% of ways)', async () => {
+test('roads: every cached highway way appears in the pack (recs ≥ 95% of ways)', async (t) => {
+  if (!hasCache('roads')) return t.skip('OSM cache not present; run pipeline/fetch.mjs');
   const P = await openPack();
   const ways = readCache('roads').filter((e) => e.type === 'way' && e.tags?.highway).length;
   const recs = countKind(P, 2);

@@ -1,6 +1,6 @@
 // shared test helpers: load the engine decoder (source/src/format.js) and open packs with it —
 // every pack the pipeline emits must decode under the engine's own reader.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,3 +43,5 @@ export const openPackFile = async (rel, decode = true) => {
 export const openPack = async (decode = true) => openPackFile('packs/grodno.mpk', decode);
 
 export const readCache = (n) => JSON.parse(readFileSync(path.join(root, 'pipeline/cache', `${n}.json`), 'utf8')).elements;
+// CI checks out without the gitignored OSM extracts; data-vs-cache tests skip there instead of failing.
+export const hasCache = (n) => existsSync(path.join(root, 'pipeline/cache', `${n}.json`));
