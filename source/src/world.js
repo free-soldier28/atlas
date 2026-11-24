@@ -247,19 +247,19 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       const j = (k + 2) % pts.length; ar += pts[k] * pts[j + 1] - pts[j] * pts[k + 1];
     }
     ar = abs(ar) / 2;
-    // ~1 tree per 300 m² (17 m spacing), max 150 per polygon — the shader canopy covers the city
-    // centre; outlying forests are far outside the ±1 km ground map, so they need real geometry
-    const want = min(floor(ar / (kind === 1 ? 300 : 250)), 150);
+    // ~1 tree per 700 m², max 80 per polygon: enough silhouette alongside the shader canopy
+    // without inflating startup geometry on iGPUs
+    const want = min(floor(ar / (kind === 1 ? 700 : 500)), 80);
     if (!want) return 0;
     let placed = 0;
-    for (let tries = 0; tries < want * 40 && placed < want; tries++) {
+    for (let tries = 0; tries < want * 25 && placed < want; tries++) {
       const x = x0 + rnd() * (x1 - x0), z = z0 + rnd() * (z1 - z0);
       let inside = false;
       for (let k = 0, m = n - 1; k < n; m = k++) {
         const xi = pts[k * 2], zi = pts[k * 2 + 1], xm = pts[m * 2], zm = pts[m * 2 + 1];
         if ((zi > z) !== (zm > z) && x < (xm - xi) * (z - zi) / (zm - zi) + xi) inside = !inside;
       }
-      if (!inside || taken.some((q) => (q[0] - x) ** 2 + (q[1] - z) ** 2 < 64)) continue;
+      if (!inside || taken.some((q) => (q[0] - x) ** 2 + (q[1] - z) ** 2 < 144)) continue;
       taken.push([x, z]);
       const h = 6 + rnd() * 5, rr = 2.2 + rnd() * 1.2;
       trunk.fr = crown.fr = [x, 0, z, 1, 0, 1];
@@ -331,7 +331,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         for (const r of L.recs) {
           const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
           earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100), r.kind); nG++;
-          scatterTrees(mTrunk, mCrown, pts, r.kind, rnd, taken);
+          if (LV < 2) scatterTrees(mTrunk, mCrown, pts, r.kind, rnd, taken); // phones keep the shader canopy only
         }
       } // kind 1 → cityTile above; kind 6 holes consumed above; kind 5 (terrain) and unknown kinds: skipped
     }
@@ -390,8 +390,8 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
     // trees: cheap silhouettes on top of the shader's canopy, culled with their tile like everything else
-    if (mTrunk.ni) put(type([mTrunk.build()], K.SOLID, 1e9, 1e9, 1500, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(1, 1, 1));
-    if (mCrown.ni) put(type([mCrown.build()], K.SOLID, 1e9, 1e9, 1500, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(.9, 1, .85));
+    if (mTrunk.ni) put(type([mTrunk.build()], K.SOLID, 1e9, 1e9, 1200, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(1, 1, 1));
+    if (mCrown.ni) put(type([mCrown.build()], K.SOLID, 1e9, 1e9, 1200, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(.9, 1, .85));
   };
   const allInds = PK.h.tiles.map((_, i) => i);
   let planTileData = null;
