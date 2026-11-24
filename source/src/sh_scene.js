@@ -1,6 +1,6 @@
 // shaders 2/4: instancing, GPU culling, materials (G-buffer) and shadow casters
 // material ids, shared by mesh generators and shaders
-const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17, ASPHALT: 18 };
+const M = { MARBLE: 0, PAVE: 1, PLASTER: 2, GOLD: 3, QUAY: 4, FLOOR: 5, WINDOW: 6, BARK: 7, ALLOY: 8, TRIM: 9, TERRAIN: 10, CORE: 11, TERRACE: 12, GROUND: 13, STEP: 14, ROCK: 15, FALL: 16, SEA: 17, ASPHALT: 18, LEAF: 19 };
 
 // per view, a compute pass frustum-tests each instance, picks its LOD and appends it to that mesh's list, drawn with one
 // indirect draw per mesh
@@ -179,6 +179,17 @@ fn ground(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f) -> Mt {
     let stone = vec3f(.7, .66, .58) * m.rgb * (.85 + .3 * A.r);
     o.alb = mix(o.alb, mix(o.alb * .8, stone, st), path); o.rough = mix(o.rough, mix(.9, .5, st), path); o.nb = mix(o.nb, o.nb * .3, path * st);
   }
+  // green zones from the pack: parks, forests and meadows get their own tint; woods additionally
+  // get a canopy pattern so an aerial view reads as trees rather than one flat green sheet
+  let land = textureSampleGrad(tLand, sLin, muv, dx.xz / 2048., dy.xz / 2048.);
+  if (land.a < .5) { // unpainted alpha is 1 — a painted polygon stores kind + 1 (1..4)
+    let cn = tri(tNoiseA, p, dx, dy, w, .09);
+    let crowns = ss(.43, .6, cn.r * .7 + cn.g * .3);
+    let woods = 1. - ss(.5, 1.5, abs(land.a * 255. - 2.)); // kind 1 = forest
+    let green = land.rgb * mix(.9, .5 + .6 * crowns, woods) * (.84 + .32 * B.a);
+    o.alb = mix(o.alb, green, .88);
+    o.nb = mix(o.nb, triN(p, dx, dy, w, .6, true) * (.15 + .4 * woods), .6);
+  }
   return o;
 }
 // land beyond the canals: pasture, fields, tracks, limestone, forest floor, river banks, beaches, sea bed.
@@ -354,6 +365,11 @@ fn terrain(p: vec3f, dx: vec3f, dy: vec3f, fw: f32, n: vec3f, tv: vec3f) -> Mt {
     let A = tri(tNoiseA, p, dx, dy, w, .5); let B = tri(tNoiseA, p, dx, dy, w, 2.4);
     o.alb = vec3f(.6, .57, .51) * i.tint.rgb * (.7 + .5 * A.r) * (.8 + .4 * B.a); o.rough = .8; o.nb = triN(p, dx, dy, w, .6, true) * 1.5 + triN(p, dx, dy, w, 3., true) * .5;
     let d = p.y; let wet = 1. - ss(.0, .5, d); o.alb = mix(o.alb, o.alb * .5, wet); o.rough = mix(o.rough, .25, wet); o.alb = mix(o.alb, vec3f(.06, .09, .04), ss(.5, .7, A.g + B.a * .4) * ss(.9, -.2, d));
+  } else if (mat == 19u) {
+    // foliage: two noise scales (leaf clusters + finer grain), tint carries the species colour
+    let A = tri(tNoiseA, p, dx, dy, w, .55); let B = tri(tNoiseA, p, dx, dy, w, 3.4);
+    o.alb = mix(vec3f(.045, .13, .035), vec3f(.14, .29, .075), A.r * .7 + B.a * .3) * i.tint.rgb * (.8 + .4 * A.a);
+    o.rough = .88; o.nb = triN(p, dx, dy, w, 1.1, true) * .7;
   } else {
     // mountain stream and fall (uv.x across, uv.y bed steepness): white and streaked when falling, glassy with threads
     // when running; ragged edges move with the flow

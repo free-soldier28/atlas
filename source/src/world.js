@@ -56,8 +56,10 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       const o = (j * 2048 + i) * 4; MAP[o] = 40; MAP[o + 1] = 40; MAP[o + 2] = 45;
     }
   };
-  // a green polygon into LANDMAP: park green, per-pixel point-in-polygon (parks are small; 1 m/texel is fine)
-  const paintPoly = (pts) => {
+  // a green polygon into LANDMAP: park / forest / grass get their own tint and a kind code in
+  // alpha, so ground() can give woods a canopy texture instead of the same flat lawn everywhere.
+  const GREEN = [[55, 110, 52], [38, 86, 40], [95, 140, 70], [80, 125, 60]]; // park, forest, grass, other → rgb
+  const paintPoly = (pts, kind = 0) => {
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
     for (let k = 0; k < pts.length; k += 2) { x0 = min(x0, pts[k]); x1 = max(x1, pts[k]); z0 = min(z0, pts[k + 1]); z1 = max(z1, pts[k + 1]); }
     const n = pts.length / 2;
@@ -67,7 +69,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         const xi = pts[k * 2], zi = pts[k * 2 + 1], xm = pts[m * 2], zm = pts[m * 2 + 1];
         if ((zi > pz) !== (zm > pz) && px < (xm - xi) * (pz - zi) / (zm - zi) + xi) inside = !inside;
       }
-      if (inside) { const o = (j * 2048 + i) * 4; LANDMAP[o] = 60; LANDMAP[o + 1] = 120; LANDMAP[o + 2] = 60; }
+      if (inside) { const o = (j * 2048 + i) * 4; const c = GREEN[kind] || GREEN[3]; LANDMAP[o] = c[0]; LANDMAP[o + 1] = c[1]; LANDMAP[o + 2] = c[2]; LANDMAP[o + 3] = kind + 1; }
     }
   };
 
@@ -235,6 +237,40 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       if ((k + 1) % TB === 0 && k + 1 < inds.length) incoming = inflate(inds.slice(k + 1, k + 1 + TB));
     }
   };
+  // procedural trees for park / forest polygons: deterministic per tile, one crown per ~800 m²,
+  // 10 m apart. Trunks and crowns are separate meshes so each gets its own material.
+  const scatterTrees = (trunk, crown, pts, kind, rnd, taken) => {
+    const n = pts.length / 2; if (n < 3 || kind > 1) return 0;
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, ar = 0;
+    for (let k = 0; k < pts.length; k += 2) {
+      x0 = min(x0, pts[k]); x1 = max(x1, pts[k]); z0 = min(z0, pts[k + 1]); z1 = max(z1, pts[k + 1]);
+      const j = (k + 2) % pts.length; ar += pts[k] * pts[j + 1] - pts[j] * pts[k + 1];
+    }
+    ar = abs(ar) / 2;
+    // ~1 tree per 300 m² (17 m spacing), max 150 per polygon — the shader canopy covers the city
+    // centre; outlying forests are far outside the ±1 km ground map, so they need real geometry
+    const want = min(floor(ar / (kind === 1 ? 300 : 250)), 150);
+    if (!want) return 0;
+    let placed = 0;
+    for (let tries = 0; tries < want * 40 && placed < want; tries++) {
+      const x = x0 + rnd() * (x1 - x0), z = z0 + rnd() * (z1 - z0);
+      let inside = false;
+      for (let k = 0, m = n - 1; k < n; m = k++) {
+        const xi = pts[k * 2], zi = pts[k * 2 + 1], xm = pts[m * 2], zm = pts[m * 2 + 1];
+        if ((zi > z) !== (zm > z) && x < (xm - xi) * (z - zi) / (zm - zi) + xi) inside = !inside;
+      }
+      if (!inside || taken.some((q) => (q[0] - x) ** 2 + (q[1] - z) ** 2 < 64)) continue;
+      taken.push([x, z]);
+      const h = 6 + rnd() * 5, rr = 2.2 + rnd() * 1.2;
+      trunk.fr = crown.fr = [x, 0, z, 1, 0, 1];
+      trunk.lathe([[0.28, 0], [0.2, h * .6]], { seg: 4 });
+      crown.lathe([[0, h * .42], [rr, h * .62], [0, h * 1.05]], { seg: 5 });
+      placed++;
+    }
+    trunk.fr = crown.fr = null;
+    return placed;
+  };
+
   // one tile's entire contribution, run in either mode: plan (dry, counts only, reserves slots)
   // or fill (real geometry, writes into the reserved slots). `slot` selects the latter.
   const tile = (i, T) => {
@@ -248,6 +284,9 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     }
     const city = cityTile(i, lods, ox, oz, S, slot || bundle ? [] : bboxes, holes); // buildings into tint buckets + road centre lines
     const mR = new MB(1 << 15), mF = new MB(1 << 12), mW = new MB(1 << 12), mG = new MB(1 << 12), mB = new MB(1 << 13);
+    const mTrunk = new MB(1 << 13), mCrown = new MB(1 << 14);
+    mTrunk.mat = M.BARK; mCrown.mat = M.LEAF;
+    const rnd = RNG(0x7EED + i * 7919), taken = [];
     mB.mat = M.QUAY; // bridge concrete: deck slab sides, parapets, piers (baked per vertex)
     let nR = 0, nW = 0, nG = 0, nB = 0;
     for (const L of lods) {
@@ -291,7 +330,8 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
         mG.mat = M.GROUND; // ground() ignores tint; the polys sit on the shader's lawn, LANDMAP carries the park green
         for (const r of L.recs) {
           const pts = new Float64Array(r.pts.length); for (let k = 0; k < r.pts.length; k++) pts[k] = -th + r.pts[k] / 100;
-          earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100)); nG++;
+          earMesh(mG, pts, 0.03); paintPoly(Array.from(r.pts, (v, k) => (k & 1 ? oz : ox) + v / 100), r.kind); nG++;
+          scatterTrees(mTrunk, mCrown, pts, r.kind, rnd, taken);
         }
       } // kind 1 → cityTile above; kind 6 holes consumed above; kind 5 (terrain) and unknown kinds: skipped
     }
@@ -349,6 +389,9 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     if (nB && mB.ni) put(type([mB.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz); // bridge concrete
     if (nW && mW.ni) put(type([mW.build()], K.WATER, 1e9, 1e9, 1e9), tcx, 0, tcz);
     if (nG && mG.ni) put(type([mG.build()], K.SOLID, 1e9, 1e9, 1e9), tcx, 0, tcz);
+    // trees: cheap silhouettes on top of the shader's canopy, culled with their tile like everything else
+    if (mTrunk.ni) put(type([mTrunk.build()], K.SOLID, 1e9, 1e9, 1500, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(1, 1, 1));
+    if (mCrown.ni) put(type([mCrown.build()], K.SOLID, 1e9, 1e9, 1500, 0, NO_SHADOW | NO_BAKE), tcx, 0, tcz, 1, Q0, rgb(.9, 1, .85));
   };
   const allInds = PK.h.tiles.map((_, i) => i);
   let planTileData = null;

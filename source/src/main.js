@@ -6,7 +6,11 @@ const say = (m, to) => { if (!dead) $('s').textContent = m; $('b').style.transfo
 // the adapter was chosen in quality.js
 if (!adapter.features.has('indirect-first-instance')) fail('This graphics adapter lacks a WebGPU feature the scene needs (indirect-first-instance).');
 const hasTS = adapter.features.has('timestamp-query');
-const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query', 'indirect-first-instance'] : ['indirect-first-instance'] });
+// ask for as much buffer headroom as this adapter allows: the merged city mesh is already close
+// to the 256 MB default, and extra geometry (trees, crossings) must not invalidate the device
+const maxBuf = min(adapter.limits.maxBufferSize, 1 << 30);
+const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query', 'indirect-first-instance'] : ['indirect-first-instance'],
+  requiredLimits: { maxBufferSize: maxBuf } });
 window.__info = `${adapter.info.vendor} · ${adapter.info.architecture} · ${adapter.info.description}${adapter.info.isFallbackAdapter ? ' · FALLBACK (software)' : ''} · ${LVN[LV]}`;
 device.addEventListener('uncapturederror', (e) => console.error('GPU: ' + e.error.message.slice(0, 900)));
 // device lost (out of memory, driver reset): restart a level lower; on Low, say so. atlasLost tells the next load
