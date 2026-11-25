@@ -19,8 +19,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
-import { makeMask, submerged, inWater, crossesBig, WET_BUILDING } from './lib/water-mask.mjs';
-import { makeDeck, buildingHitsDeck } from './lib/bridge-conflicts.mjs';
+import { makeMask, submerged, inWater, crossesBig, crossesWaterAny, WET_BUILDING } from './lib/water-mask.mjs';
+import { makeDeck, buildingHitsDeck, deckCoversWay } from './lib/bridge-conflicts.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const M2 = 2000; // the clip margin build-city applies (bbox + 2 km)
@@ -63,7 +63,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     W.waters.push(...recs.w.map((w) => ({ pts: w.pts, ox, oz, tile: i })));
     W.lines.push(...recs.wl.map((w) => ({ pts: w.pts, hw: ({ 8: 12, 9: 4, 10: 12 })[w.kind] / 2, ox, oz, tile: i })));
     W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId, top: (b.base10 + b.h10) / 10 })));
-    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, flags: r.flags, ys: r.ys })));
+    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, cls: r.cls, flags: r.flags, ys: r.ys })));
   }
   stats.tiles = P.h.tiles.length;
 
@@ -105,7 +105,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
         msg: `bridge deck peaks at ${(Math.max(...r.ys) / 100).toFixed(1)} m — too low for a water crossing (tile ${r.tile})`,
         fix: [{ tile: r.tile, x: (r.ox + r.pts[0] / 100), z: (r.oz + r.pts[1] / 100) }] });
       else if (Math.min(...r.ys) < 0) errors.push({ check: 'bridges', msg: `negative deck height in ys (tile ${r.tile})` });
-      else if (!crossesBig(mask, g, 2)) errors.push({ check: 'bridges',
+      else if (!crossesBig(mask, g, 2) && !crossesWaterAny(mask, g)) errors.push({ check: 'bridges',
         msg: `bridge deck does not cross big water (tile ${r.tile}, at ${g[0].toFixed(0)},${g[1].toFixed(0)}) — bank-running way flagged as a bridge`,
         fix: [{ tile: r.tile, x: g[0], z: g[1] }], clearBridge: true });
       continue;
@@ -130,6 +130,20 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   if (deckBuildings) errors.push({ check: 'bridgeBuildings',
     msg: `${deckBuildings} building(s) intersect an elevated bridge deck`, fix: deckFix });
   stats.bridgeBuildingsDropped = deckBuildings;
+
+  // a low ramp landing on a ground way buries it under the slab; the deck must be high enough to
+  // pass under, or the covered piece of the way must have been clipped out by build-city.
+  let deckPaths = 0; const deckPathFix = [];
+  for (const r of W.roads) {
+    if (r.flags & 2) continue;
+    const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
+    if (!decks.some((d) => deckCoversWay(g, r.hw, d))) continue;
+    deckPaths++;
+    if (deckPathFix.length < 6) deckPathFix.push({ tile: r.tile, x: g[0], z: g[1] });
+  }
+  if (deckPaths) errors.push({ check: 'deckOverPath',
+    msg: `${deckPaths} ground way(s) run under a low bridge ramp`, fix: deckPathFix });
+  stats.deckPathsUnderRamps = deckPaths;
 
   // ---------- render check: road joints covered (buildWorld once) ----------
   const W2 = await E.buildWorld(P);

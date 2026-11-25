@@ -1,6 +1,6 @@
 # Atlas
 
-**A real-city 3D map renderer for the browser, in the spirit of [Atlantis](https://github.com/Noniv/atlantis): raw WebGPU, no engines, no libraries, one HTML file — but for actual places, built for car navigation.**
+**A real-city 3D map renderer for the browser: raw WebGPU, no engines, no libraries, one HTML file — built for actual places and car navigation.**
 
 The engine is small (~100 KB); the places live in **map packs** (`packs/*.mpk`) generated from OpenStreetMap. The first city is **Grodno, Belarus**. The format is tile-based and scale-free: the same layout serves a city pack (full detail) and a country pack (coarse, streamed by range requests), so the map grows city by city and country by country without engine changes.
 
@@ -15,6 +15,8 @@ The engine ships with **no places inside**. A city, a country, a whole route net
 - **Versioned and attributed.** Every pack carries its format version, source attribution (© OpenStreetMap contributors) and bounding box in the header — packs stay forward-compatible as the engine grows.
 
 ![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)
+
+[![CI + GitHub Pages](https://github.com/free-soldier28/atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/free-soldier28/atlas/actions/workflows/ci.yml) — tests and the built page are deployed by GitHub Actions.
 
 ## Run it
 
@@ -55,5 +57,4 @@ The routing graph ships inside city packs from day one — navigation reads what
 
 - Map data © OpenStreetMap contributors (ODbL)
 - Terrain (planned): Copernicus GLO-30 DEM
-- Engine base: parts ported from [Atlantis](https://github.com/Noniv/atlantis) (MIT)
 - This repo: MIT — see [LICENSE](LICENSE)

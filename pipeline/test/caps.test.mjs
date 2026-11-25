@@ -86,6 +86,7 @@ test('roof caps: every cap vertex stays inside its own footprint (no tents over 
     const ring = rings[ti];
     const mN = W.meshes[T.lods[0]], vb = new Float32Array(mN.vb);
     assert.ok(mN.nv > 0, 'near roof slot has geometry');
+    if (ti === 1) assert.ok(mN.ib.length >= 18, 'hip end triangles close the roof, not just two slope quads');
     let eavesMin = 1e9;
     for (let v = 0; v < mN.nv; v++) {
       const x = vb[v * 5] + ix, z = vb[v * 5 + 2] + iz, y = vb[v * 5 + 1];

@@ -48,6 +48,61 @@ export const redundantDeck = (short, long) => {
   return false;
 };
 
+// A low bridge ramp can land on a ground-level footway/road and bury it under the slab (the
+// "мост перекрывает дорожку" defect). A high span is fine — traffic can pass underneath — so only
+// deck samples below `maxClear` count. `wp/hw` describe the ground way; `deck` comes from makeDeck.
+const coverSamples = (wp, hw, deck, { maxClear = 4, margin = .5, step = 3 } = {}) => {
+  let ax0 = 1e9, az0 = 1e9, ax1 = -1e9, az1 = -1e9;
+  for (let k = 0; k < wp.length; k += 2) {
+    if (wp[k] < ax0) ax0 = wp[k]; if (wp[k] > ax1) ax1 = wp[k];
+    if (wp[k + 1] < az0) az0 = wp[k + 1]; if (wp[k + 1] > az1) az1 = wp[k + 1];
+  }
+  const [x0, z0, x1, z1] = deck.bbox;
+  if (ax1 < x0 || ax0 > x1 || az1 < z0 || az0 > z1) return [];
+  const out = [], R = deck.hw + hw + margin, R2 = R * R;
+  for (let i = 0; i + 3 < wp.length; i += 2) {
+    const ax = wp[i], az = wp[i + 1], bx = wp[i + 2], bz = wp[i + 3];
+    const sl = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(sl / step));
+    for (let m = 0; m <= n; m++) {
+      const f = m / n, x = ax + (bx - ax) * f, z = az + (bz - az) * f;
+      let best = Infinity, y = 0;
+      for (let j = 0; j + 3 < deck.p.length; j += 2) {
+        const lx = deck.p[j], lz = deck.p[j + 1], dx = deck.p[j + 2] - lx, dz = deck.p[j + 3] - lz;
+        const L2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((x - lx) * dx + (z - lz) * dz) / L2));
+        const ex = x - lx - dx * t, ez = z - lz - dz * t, d2 = ex * ex + ez * ez;
+        if (d2 < best) { best = d2; y = (deck.ys[j / 2] + (deck.ys[j / 2 + 1] - deck.ys[j / 2]) * t) / 100; }
+      }
+      out.push({ x, z, cover: best <= R2 && y <= maxClear });
+    }
+  }
+  return out;
+};
+
+export const deckCoversWay = (wp, hw, deck, opts = {}) => {
+  let run = 0, best = 0, prev = null;
+  for (const s of coverSamples(wp, hw, deck, opts)) {
+    const step = prev ? Math.hypot(s.x - prev.x, s.z - prev.z) : 0;
+    if (s.cover) { run += step || 1; if (run > best) best = run; } else run = 0;
+    prev = s;
+  }
+  return best >= (opts.minLen ?? 3);
+};
+
+// the uncovered pieces of a ground way, in world metres — build-city writes them back instead of
+// deleting a whole long path just because a ramp crosses one end of it.
+export const uncoveredWayRuns = (wp, hw, deck, opts = {}) => {
+  const runs = []; let cur = [];
+  for (const s of coverSamples(wp, hw, deck, opts)) {
+    if (s.cover) { if (cur.length >= 4) runs.push(cur); cur = []; continue; }
+    const n = cur.length;
+    if (n >= 2 && Math.abs(cur[n - 2] - s.x) < .01 && Math.abs(cur[n - 1] - s.z) < .01) continue;
+    cur.push(s.x, s.z);
+  }
+  if (cur.length >= 4) runs.push(cur);
+  return runs;
+};
+
 // A way that doubles back on itself (≥150° turn) is broken bridge data: the mitered deck folds
 // into a V and can end in mid-air. Drop it instead of trying to build structure around it.
 export const hairpin = (p, limit = 2.6) => {

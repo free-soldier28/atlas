@@ -48,7 +48,8 @@ export const collectCrossings = (crossingWays, drivableWays) => {
   for (const w of crossingWays) {
     const kind = kindOf(w.crossing);
     if (kind < 0 || !w.pts || w.pts.length < 4) continue;
-    let hits = 0;
+    const n = w.pts.length / 2, mid = [w.pts[n * 2 - 2] + w.pts[0], w.pts[n * 2 - 1] + w.pts[1]].map((v) => v / 2);
+    const cand = []; // one crossing per tagged way — the footway's two ends are the SAME crossing
     for (let k = 0; k + 3 < w.pts.length; k += 2) {
       const ax = w.pts[k], az = w.pts[k + 1], bx = w.pts[k + 2], bz = w.pts[k + 3];
       const i0 = Math.floor(Math.min(ax, bx) / CELL), i1 = Math.floor(Math.max(ax, bx) / CELL);
@@ -56,24 +57,37 @@ export const collectCrossings = (crossingWays, drivableWays) => {
       for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
         for (const s of grid.get(cellKey(i, j)) || []) {
           const p = intersect(ax, az, bx, bz, s[0], s[1], s[2], s[3]);
-          if (!p) continue;
-          add(s, p, kind); hits++;
+          if (p) cand.push({ s, p, score: -10 + Math.hypot(p[0] - mid[0], p[1] - mid[1]) / 20 });
         }
       }
     }
-    if (hits) continue;
-    // mappers usually cut the footway at the kerb, so its ends only TOUCH the road centreline:
-    // snap each end to the nearest road segment within 5 m instead of demanding an intersection
-    for (const [ex, ez] of [[w.pts[0], w.pts[1]], [w.pts[w.pts.length - 2], w.pts[w.pts.length - 1]]]) {
-      const i0 = Math.floor((ex - 5) / CELL), i1 = Math.floor((ex + 5) / CELL);
-      const j0 = Math.floor((ez - 5) / CELL), j1 = Math.floor((ez + 5) / CELL);
-      let best = null, bd = 25;
-      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (const s of grid.get(cellKey(i, j)) || []) {
-        const dx = s[2] - s[0], dz = s[3] - s[1], t = Math.max(0, Math.min(1, ((ex - s[0]) * dx + (ez - s[1]) * dz) / (dx * dx + dz * dz || 1)));
-        const px = s[0] + dx * t, pz = s[1] + dz * t, d2 = (px - ex) ** 2 + (pz - ez) ** 2;
-        if (d2 < bd) { bd = d2; best = [s, [px, pz]]; }
+    if (!cand.length) {
+      // mappers cut footways at the kerb, so their ends only TOUCH the road centreline. Snap the
+      // nearest road segment — but prefer one the pedestrians actually cross at ~90°. Taking the
+      // closest segment alone snaps a footway running ALONG a street to that street, painting the
+      // zebra parallel to the traffic instead of across it.
+      for (const atEnd of [false, true]) {
+        const ex = atEnd ? w.pts[n * 2 - 2] : w.pts[0], ez = atEnd ? w.pts[n * 2 - 1] : w.pts[1];
+        const fx = atEnd ? w.pts[n * 2 - 2] - w.pts[n * 2 - 4] : w.pts[2] - w.pts[0];
+        const fz = atEnd ? w.pts[n * 2 - 1] - w.pts[n * 2 - 3] : w.pts[3] - w.pts[1];
+        const fl = Math.hypot(fx, fz) || 1;
+        const i0 = Math.floor((ex - 5) / CELL), i1 = Math.floor((ex + 5) / CELL);
+        const j0 = Math.floor((ez - 5) / CELL), j1 = Math.floor((ez + 5) / CELL);
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (const s of grid.get(cellKey(i, j)) || []) {
+          const dx = s[2] - s[0], dz = s[3] - s[1], dl = Math.hypot(dx, dz) || 1;
+          const t = Math.max(0, Math.min(1, ((ex - s[0]) * dx + (ez - s[1]) * dz) / (dl * dl)));
+          const px = s[0] + dx * t, pz = s[1] + dz * t, d = Math.hypot(px - ex, pz - ez);
+          if (d > 5) continue;
+          const sin = Math.abs(dx * fz - dz * fx) / (dl * fl); // 1 = footway ⟂ road
+          // a parallel snap is a wrong crossing; keep it only as a last resort for coverage
+          const score = (1 - sin) * 8 + d / 5 + (s[4] || 9) * .05;
+          cand.push({ s, p: [px, pz], score: sin < .57 ? score + 20 : score });
+        }
       }
-      if (best) add(best[0], best[1], kind);
+    }
+    if (cand.length) {
+      cand.sort((a, b) => a.score - b.score);
+      add(cand[0].s, cand[0].p, kind);
     }
   }
   return out;

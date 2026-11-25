@@ -82,8 +82,8 @@ export const submerged = (mask, pts, margin = 0) => {
 // used to be elevated into a "bridge" along dry land: crossesBig was a single-sample distance test.
 // Polygons use the strict deep-inside/edge-crossing test from bridge.mjs; ribbons additionally need
 // a centreline crossing at a real angle (a way 2° from the river is an embankment, not a bridge).
-export const crossesBig = (mask, pts, margin = 0) => {
-  if (crossesWater(pts, mask.polys.filter((p) => p.big))) return true;
+export const crossesBig = (mask, pts, margin = 0, any = false) => {
+  if (crossesWater(pts, any ? mask.polys : mask.polys.filter((p) => p.big), { minArea: any ? 0 : 2000 })) return true;
   const side = (p, x, z) => {
     const ux = p.pts[2] - p.pts[0], uz = p.pts[3] - p.pts[1];
     return (ux * (z - p.pts[1]) - uz * (x - p.pts[0])) / (Math.hypot(ux, uz) || 1);
@@ -96,26 +96,31 @@ export const crossesBig = (mask, pts, margin = 0) => {
   }
   const stats = new Map();
   for (const [x, z] of samples) for (const p of near(mask, x, z)) {
-    if (!p.seg || !p.big) continue;
+    if (!p.seg || (!any && !p.big)) continue;
     const s = side(p, x, z);
     let st = stats.get(p); if (!st) stats.set(p, st = { p, min: Infinity, max: -Infinity });
     st.min = Math.min(st.min, s); st.max = Math.max(st.max, s);
   }
   for (const st of stats.values()) {
-    const p = st.p, half = p.hw + margin;
+    const p = st.p, half = any ? .1 : p.hw + margin;
     // approach one bank and leave the other: a fragment wholly along the band fails here
     if (st.min > -half || st.max < half) continue;
     const ux = p.pts[2] - p.pts[0], uz = p.pts[3] - p.pts[1], ul = Math.hypot(ux, uz);
+    const minSin = any ? .15 : .2, span = any ? .12 : .05;
     for (let k = 1; k < samples.length; k++) {
       const [ax, az] = samples[k - 1], [bx, bz] = samples[k];
       const s1 = side(p, ax, az), s2 = side(p, bx, bz);
       if (s1 * s2 > 0 || (s1 === 0 && s2 === 0)) continue;
       const vx = bx - ax, vz = bz - az, vl = Math.hypot(vx, vz);
-      if (vl < .01 || Math.abs(ux * vz - uz * vx) / (ul * vl) < .2) continue; // < ~11°: along the bank
+      if (vl < .01 || Math.abs(ux * vz - uz * vx) / (ul * vl) < minSin) continue; // < ~11°: along the bank
       const t = s1 / (s1 - s2 || 1), px = ax + vx * t, pz = az + vz * t;
       const along = ((px - p.pts[0]) * ux + (pz - p.pts[1]) * uz) / (ul * ul);
-      if (along >= -.05 && along <= 1.05) return true;
+      if (along >= -span && along <= 1 + span) return true;
     }
   }
   return false;
 };
+
+// size-agnostic variant for ways MAPPED as bridges: a 4 m stream still needs a deck, and a mapper's
+// bridge=yes is authoritative when the way genuinely crosses the water geometry at an angle.
+export const crossesWaterAny = (mask, pts) => crossesBig(mask, pts, 0, true);

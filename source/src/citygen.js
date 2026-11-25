@@ -264,7 +264,13 @@ function cityBuilding(iT, iB, r, ox, oz, cx, cz, wallB, roofB, bboxes, holes) {
       if (!par && roof === 1) continue; // gable ends are wall triangles, done above
       const p0 = fp(f, 0, eaves, 0), p1 = fp(f, f.L, eaves, 0);
       const run = abs((p0[0] + p1[0]) / 2 * pdx + (p0[2] + p1[2]) / 2 * pdz - pc);
-      if (run < 0.05) continue;
+      // a long wall whose midpoint sits on the ridge has no slope to draw; a HIP END does — its
+      // eave edge is the wall and the apex is the ridge end directly above it. Skipping that case
+      // left both short ends of every rectangular hipped roof open (156 caps in the Grodno pack).
+      // a long wall whose midpoint sits on the ridge has no slope to draw; a HIP END does — its
+      // eave edge is the wall and the apex is the ridge end directly above it. Skipping that case
+      // left both short ends of every rectangular hipped roof open (156 caps in the Grodno pack).
+      if (par && run < 0.05) continue;
       const nl = hypot(f.nx * rise, run, f.nz * rise), N = [f.nx * rise / nl, run / nl, f.nz * rise / nl];
       const V = (p) => rb.n.v(p[0], p[1], p[2], N[0], N[1], N[2], 1);
       if (par) {

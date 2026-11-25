@@ -29,6 +29,30 @@ test('collectCrossings: a footway ending at the kerb is snapped to the road', ()
   assert.equal(out[0].k, 1);
 });
 
+test('collectCrossings: a +z road keeps a π/2 heading (bars span the road, not along it)', () => {
+  const road = [{ pts: [0, -100, 0, 100], cls: 2, width: 10 }];
+  const foot = [{ pts: [-20, 0, 20, 0], crossing: 'zebra' }];
+  const out = collectCrossings(foot, road);
+  assert.equal(out.length, 1);
+  assert.ok(Math.abs(out[0].a - Math.PI / 2) < 0.01, 'road tangent, not footway tangent');
+});
+
+test('collectCrossings: a perpendicular road wins over a closer parallel one', () => {
+  const roads = [
+    { pts: [0, -100, 0, 100], cls: 2, width: 12 },   // footway runs ALONG this road: wrong crossing
+    { pts: [-100, -6, 100, -6], cls: 5, width: 8 },  // footway ends at it at 90°: correct
+  ];
+  const foot = [{ pts: [0, -20, 0, -5], crossing: 'zebra' }];
+  const out = collectCrossings(foot, roads);
+  assert.equal(out.length, 1, 'one crossing per tagged way');
+  assert.ok(Math.abs(out[0].a) < 0.01, 'horizontal road heading, not the parallel one');
+});
+
+test('collectCrossings: a footway crossing two roads still produces one zebra', () => {
+  const roads = [{ pts: [-100, -10, 100, -10], cls: 4, width: 10 }, { pts: [-100, 10, 100, 10], cls: 4, width: 10 }];
+  assert.equal(collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads).length, 1);
+});
+
 test('collectCrossings: crossing=no and far-away ways are ignored', () => {
   const road = [{ pts: [-100, 0, 100, 0], cls: 5, width: 8 }];
   assert.equal(collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'no' }], road).length, 0);

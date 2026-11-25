@@ -1,7 +1,7 @@
 // bridge vs building conflicts: the fix in build-city and the guard in qa must agree on one rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDeck, buildingHitsDeck, redundantDeck, hairpin } from '../lib/bridge-conflicts.mjs';
+import { makeDeck, buildingHitsDeck, redundantDeck, hairpin, deckCoversWay, uncoveredWayRuns } from '../lib/bridge-conflicts.mjs';
 
 // deck along x=0..100 at z=0, 12 m wide, 5 m high in the middle, ramps down at both ends
 const deck = makeDeck([0, 0, 40, 0, 60, 0, 100, 0], [6, 500, 500, 6], 6);
@@ -29,6 +29,15 @@ test('a big building straddling the corridor is caught by its centroid', () => {
 test('far buildings are rejected by the bbox prefilter', () => {
   const far = [500, 500, 510, 500, 510, 510, 500, 510];
   assert.equal(buildingHitsDeck(far, 30, deck), false);
+});
+
+test('a footway crossing a low ramp is buried by the slab; a high span is clear', () => {
+  const ramp = [10, -20, 10, 20], span = [50, -20, 50, 20];
+  assert.equal(deckCoversWay(ramp, 1, deck), true, 'the ramp lands on the path');
+  assert.equal(deckCoversWay(span, 1, deck), false, '5 m overhead: the path passes underneath');
+  assert.equal(deckCoversWay([200, -20, 200, 20], 1, deck), false, 'far away');
+  const runs = uncoveredWayRuns(ramp, 1, deck);
+  assert.equal(runs.length, 2, 'the covered middle of the path is cut out, both ends kept');
 });
 
 test('hairpin: a way doubling back on itself is dropped, a normal bend is kept', () => {
