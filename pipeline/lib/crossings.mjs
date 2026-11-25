@@ -39,11 +39,11 @@ export const collectCrossings = (crossingWays, drivableWays) => {
     }
   }
   const out = [];
-  const add = (s, p, kind) => {
+  const add = (s, p, kind, heading) => {
     // two OSM footways ending at the same junction often describe the SAME zebra; merge them
     if (out.some((c) => Math.hypot(c.x - p[0], c.z - p[1]) < (c.road === s[6] ? 25 : 2))) return;
     out.push({ x: Math.round(p[0] * 100) / 100, z: Math.round(p[1] * 100) / 100,
-      a: Math.round(Math.atan2(s[3] - s[1], s[2] - s[0]) * 1e3) / 1e3,
+      a: Math.round((heading === undefined ? Math.atan2(s[3] - s[1], s[2] - s[0]) : heading) * 1e3) / 1e3,
       w: Math.round(s[5] * 10) / 10, k: kind, road: s[6] });
   };
   for (const w of crossingWays) {
@@ -58,7 +58,8 @@ export const collectCrossings = (crossingWays, drivableWays) => {
       for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
         for (const s of grid.get(cellKey(i, j)) || []) {
           const p = intersect(ax, az, bx, bz, s[0], s[1], s[2], s[3]);
-          if (p) cand.push({ s, p, score: -10 + Math.hypot(p[0] - mid[0], p[1] - mid[1]) / 20 });
+          if (p) cand.push({ s, p, heading: Math.atan2(bz - az, bx - ax) + Math.PI / 2,
+            score: -10 + Math.hypot(p[0] - mid[0], p[1] - mid[1]) / 20 });
         }
       }
     }
@@ -84,7 +85,8 @@ export const collectCrossings = (crossingWays, drivableWays) => {
           // mappers often make the footway END ON a node of the road way: that shared node identifies
           // the crossed road at a junction far more reliably than distance to nearby side streets.
           const shared = !!(w.nodeIds && s[7] && w.nodeIds.some((id) => s[7].includes(id)));
-          cand.push({ s, p: [px, pz], shared, score: (1 - sin) * 8 + d / 5 + (s[4] || 9) * .05 - (shared ? 20 : 0) });
+          cand.push({ s, p: [px, pz], shared, heading: Math.atan2(fz, fx) + Math.PI / 2,
+            score: (1 - sin) * 8 + d / 5 + (s[4] || 9) * .05 - (shared ? 20 : 0) });
         }
       }
       const shared = cand.filter((c) => c.shared);
@@ -92,7 +94,7 @@ export const collectCrossings = (crossingWays, drivableWays) => {
     }
     if (cand.length) {
       cand.sort((a, b) => a.score - b.score);
-      add(cand[0].s, cand[0].p, kind);
+      add(cand[0].s, cand[0].p, kind, cand[0].heading);
     }
   }
   return out;

@@ -16,7 +16,7 @@ test('collectCrossings: centre crossing keeps road heading, width and kind', () 
   const out = collectCrossings(foot, road);
   assert.equal(out.length, 1, 'one crossing at the intersection');
   assert.ok(Math.abs(out[0].x) < 0.01 && Math.abs(out[0].z) < 0.01);
-  assert.ok(Math.abs(out[0].a) < 0.01, 'heading follows the road');
+  assert.ok(Math.abs(Math.sin(out[0].a)) < 0.01, 'bars span the road across the footway');
   assert.equal(out[0].w, 12);
   assert.equal(out[0].k, 0);
 });
@@ -45,7 +45,7 @@ test('collectCrossings: a perpendicular road wins over a closer parallel one', (
   const foot = [{ pts: [0, -20, 0, -5], crossing: 'zebra' }];
   const out = collectCrossings(foot, roads);
   assert.equal(out.length, 1, 'one crossing per tagged way');
-  assert.ok(Math.abs(out[0].a) < 0.01, 'horizontal road heading, not the parallel one');
+  assert.ok(Math.abs(Math.sin(out[0].a)) < 0.01, 'horizontal road heading (mod π)');
 });
 
 test('collectCrossings: a footway crossing two roads still produces one zebra', () => {
