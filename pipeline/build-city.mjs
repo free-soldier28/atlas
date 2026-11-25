@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MPKBuilder, geoToLocal } from './lib/pack.mjs';
+import { makeRoadIndex, footwayRoadRuns } from './lib/road-clip.mjs';
 import { deckHeights, ysAt } from './lib/bridge.mjs';
 import { makeDeck, buildingHitsDeck, redundantDeck, hairpin, deckCoversWay, uncoveredWayRuns } from './lib/bridge-conflicts.mjs';
 import { makeMask, submerged, inWater, crossesBig, crossesWaterAny, WET_BUILDING } from './lib/water-mask.mjs';
@@ -610,6 +611,29 @@ for (const t of tiles.values()) {
 }
 stats.deckPathsClipped = deckPathsClipped;
 
+// Untagged footways crossing a carriageway are drawn as pale bands on the asphalt. Cut the piece
+// inside the road corridor (not the approaches) — a zebra is a mapped marking, we don't invent one.
+const roadIndex = makeRoadIndex(tiles.values().flatMap((t) => {
+  const ox = t.tx * S, oz = t.tz * S;
+  return t.r.filter((r) => !(r.flags & 2) && r.cls <= 7).map((r) => ({ cls: r.cls, width: (r.w10 || 80) / 10,
+    pts: Array.from(r.pts, (v, k) => (k % 2 ? oz : ox) + v / CM) }));
+}));
+let footwaysClipped = 0;
+for (const t of tiles.values()) {
+  const ox = t.tx * S, oz = t.tz * S, out = [];
+  for (const r of t.r) {
+    if (r.flags & 2 || r.cls < 8) { out.push(r); continue; }
+    const p = Array.from(r.pts, (v, k) => (k % 2 ? oz : ox) + v / CM);
+    const runs = footwayRoadRuns(p, roadIndex);
+    if (!runs) { out.push(r); continue; }
+    footwaysClipped++;
+    for (const run of runs) if (run.length >= 4)
+      out.push({ ...r, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) });
+  }
+  t.r = out;
+}
+stats.footwaysClippedAtRoads = footwaysClipped;
+
 // ---------- poses: 6 real Grodno viewpoints (local metres via geoToLocal) ----------
 const [nemX, nemZ] = L(53.6790, 23.8170);   // over the Neman near the Soviet bridge
 const [casX, casZ] = L(53.6760, 23.8220);   // the Old Castle
@@ -701,6 +725,7 @@ console.log(`build: bridges ${stats.bridgesTagged} tagged (osm), ${stats.bridges
 console.log(`build: pedestrian crossings ${stats.crossings} painted from tagged footways`);
 console.log(`build: dropped ${stats.droppedHairpinBridges} doubled-back bridge ways, cleared ${stats.falseBridgesCleared} ways tagged as bridges beside (not across) water`);
 console.log(`build: cut ${stats.deckPathsClipped} ground way(s) where a low bridge ramp covered them`);
+console.log(`build: cut ${stats.footwaysClippedAtRoads} untagged footway(s) at carriageways`);
 console.log(`build: water mask dropped ${stats.waterBuildingsDropped} buildings, elevated ${stats.waterRoadsElevated} roads, clipped ${stats.waterRoadsClipped} roads into ${stats.waterRunsKept} dry runs`);
 {
   const { qa } = await import('./qa.mjs');
