@@ -73,6 +73,8 @@ test('pack ships real crossings and the renderer paints them', async () => {
   const src = readFileSync(path.join(ROOT, 'source', 'src', 'world.js'), 'utf8');
   assert.match(src, /PK\.h\.crossings/, 'world reads the header list');
   assert.match(src, /mb\.quad\(a, b, d, e\)/, 'zebra bars are real geometry');
+  assert.match(src, /cx = c\.x \+ nx \* o, cz = c\.z \+ nz \* o/, 'bars repeat across the road');
+  assert.match(src, /cx - ux \* half, 0\.095, cz - uz \* half/, 'each bar runs along the road');
   const cache = hasCache('roads') ? readCache('roads').filter((e) => e.tags?.crossing && e.tags.crossing !== 'no') : null;
   if (cache) assert.ok(cache.length > 100, 'the OSM cache really contains crossing tags');
 });

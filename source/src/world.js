@@ -573,13 +573,15 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux, half = min((c.w || 8) / 2, 6.5);
       // real zebra: wide bars, tight gaps, numbered like the painted crossing. Unmarked ones get
       // a thinner, sparser pattern so the two kinds read differently at a glance.
+      // longitudinal zebra: each bar runs ALONG the carriageway, the row of bars spans its width
+      // (the style in the reference — the old crosswise bars read as a ladder across the road).
       const nBar = c.k === 2 ? 4 : 6, bw = c.k === 2 ? .4 : .8, gap = c.k === 2 ? 1.0 : .6;
       for (let s = 0; s < nBar; s++) {
-        const o = (s - (nBar - 1) / 2) * (bw + gap), cx = c.x + ux * o, cz = c.z + uz * o;
-        const a = mb.v(cx - nx * half, 0.095, cz - nz * half, 0, 1, 0);
-        const b = mb.v(cx + nx * half, 0.095, cz + nz * half, 0, 1, 0);
-        const d = mb.v(cx + nx * half + ux * bw, 0.095, cz + nz * half + uz * bw, 0, 1, 0);
-        const e = mb.v(cx - nx * half + ux * bw, 0.095, cz - nz * half + uz * bw, 0, 1, 0);
+        const o = (s - (nBar - 1) / 2) * (bw + gap), cx = c.x + nx * o, cz = c.z + nz * o;
+        const a = mb.v(cx - ux * half, 0.095, cz - uz * half, 0, 1, 0);
+        const b = mb.v(cx + ux * half, 0.095, cz + uz * half, 0, 1, 0);
+        const d = mb.v(cx + ux * half + nx * bw, 0.095, cz + uz * half + nz * bw, 0, 1, 0);
+        const e = mb.v(cx - ux * half + nx * bw, 0.095, cz - uz * half + nz * bw, 0, 1, 0);
         mb.quad(a, b, d, e);
       }
     }
