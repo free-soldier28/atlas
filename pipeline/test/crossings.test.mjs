@@ -53,6 +53,17 @@ test('collectCrossings: a footway crossing two roads still produces one zebra', 
   assert.equal(collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads).length, 1);
 });
 
+test('collectCrossings: a junction zebra spans all parallel carriageways', () => {
+  const roads = [
+    { pts: [-100, 0, 100, 0], cls: 4, width: 10, osmId: 1 },
+    { pts: [-100, 12, 100, 12], cls: 4, width: 10, osmId: 2 },
+    { pts: [0, -100, 0, 100], cls: 4, width: 10, osmId: 3 }, // perpendicular leg
+  ];
+  const out = collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads);
+  assert.equal(out.length, 1);
+  assert.ok(out[0].w > 20, `zebra width ${out[0].w} covers both parallel roads, not a lone patch`);
+});
+
 test('collectCrossings: a footway running along the only nearby road gets no zebra', () => {
   const roads = [{ pts: [-100, 0, 100, 0], cls: 5, width: 8, osmId: 1, nodeIds: [1, 2] }];
   const foot = [{ pts: [0, -3, 40, -3], crossing: 'unmarked', nodeIds: [10, 11] }];

@@ -97,5 +97,23 @@ export const collectCrossings = (crossingWays, drivableWays) => {
       add(cand[0].s, cand[0].p, kind, cand[0].heading);
     }
   }
+  // at a junction the visual carriageway merges several OSM ways; a zebra sized from the one
+  // snapped segment sits as an isolated patch in the middle of the asphalt. Widen it to cover
+  // every parallel road corridor touching the crossing point.
+  for (const c of out) {
+    const ux = Math.cos(c.a), uz = Math.sin(c.a);
+    let half = (c.w || 8) / 2;
+    const ci = Math.floor(c.x / CELL), cj = Math.floor(c.z / CELL);
+    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++)
+      for (const s of grid.get(cellKey(i, j)) || []) {
+        const dx = s[2] - s[0], dz = s[3] - s[1], dl = Math.hypot(dx, dz) || 1;
+        if (Math.abs(dx * uz - dz * ux) / dl > .42) continue; // a different road at the junction
+        const t = Math.max(0, Math.min(1, ((c.x - s[0]) * dx + (c.z - s[1]) * dz) / (dl * dl)));
+        const d = Math.hypot(c.x - s[0] - dx * t, c.z - s[1] - dz * t);
+        if (d > 25) continue;
+        half = Math.max(half, d + s[5] / 2);
+      }
+    c.w = Math.round(Math.min(half * 2, 40) * 10) / 10;
+  }
   return out;
 };

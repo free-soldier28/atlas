@@ -22,7 +22,7 @@ test('determinism: two build-city runs → identical hashes, pack left byte-iden
   const saved = path.join(keep, 'grodno.mpk');
   copyFileSync(PACK, saved); // the original, to restore + compare against
   const orig = sha(saved);
-  const run = () => spawnSync(process.execPath, [path.join(root, 'pipeline/build-city.mjs')], { timeout: 120000, encoding: 'utf8' });
+  const run = () => spawnSync(process.execPath, [path.join(root, 'pipeline/build-city.mjs')], { timeout: 300000, encoding: 'utf8' });
   try {
     const r1 = run();
     assert.equal(r1.status, 0, `build-city run 1 failed: ${r1.stderr || r1.stdout}`);

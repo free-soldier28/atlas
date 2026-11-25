@@ -570,7 +570,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     const mb = new MB(min(CS.length * 96, 1 << 17)); mb.mat = M.PLASTER;
     for (const c of CS) {
       if (!isFinite(c.x) || !isFinite(c.z) || !isFinite(c.a)) continue;
-      const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux, half = min((c.w || 8) / 2, 6.5);
+      const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux, half = min((c.w || 8) / 2, 20);
       // real zebra: wide bars, tight gaps, numbered like the painted crossing. Unmarked ones get
       // a thinner, sparser pattern so the two kinds read differently at a glance.
       // longitudinal zebra: each bar runs ALONG the carriageway, the row of bars spans its width
