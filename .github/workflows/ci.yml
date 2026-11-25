@@ -41,6 +41,8 @@ jobs:
         run: node source/build-all.mjs
       - name: Stage Pages site
         run: mkdir -p site && cp index.html site/index.html
+      - name: Let the artifact register before deploy
+        run: sleep 20
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
