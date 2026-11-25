@@ -135,7 +135,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   // pass under, or the covered piece of the way must have been clipped out by build-city.
   let deckPaths = 0; const deckPathFix = [];
   for (const r of W.roads) {
-    if (r.flags & 2) continue;
+    if (r.flags & 2 || r.cls < 8) continue;
     const g = Array.from(r.pts, (v, k) => (k % 2 ? r.oz : r.ox) + v / 100);
     if (!decks.some((d) => deckCoversWay(g, r.hw, d))) continue;
     deckPaths++;

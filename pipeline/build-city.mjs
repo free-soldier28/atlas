@@ -597,7 +597,7 @@ let deckPathsClipped = 0;
 for (const t of tiles.values()) {
   const ox = t.tx * S, oz = t.tz * S, out = [];
   for (const r of t.r) {
-    if (r.flags & 2) { out.push(r); continue; }
+    if (r.flags & 2 || r.cls < 8) { out.push(r); continue; } // only footways/paths — cutting a carriageway leaves a gap
     const p = [];
     for (let k = 0; k < r.pts.length; k += 2) p.push(ox + r.pts[k] / CM, oz + r.pts[k + 1] / CM);
     const hw = (r.w10 || 80) / 20;
