@@ -12,6 +12,8 @@ test('pack QA: rings, heights, bbox, water overlaps, road joint coverage', async
   assert.equal(by('bbox').length, 0, 'bbox: ' + by('bbox')[0]?.msg);
   assert.equal(by('waterOverlap').length, 0, 'waterOverlap: ' + by('waterOverlap')[0]?.msg);
   assert.equal(by('roadJoints').length, 0, 'roadJoints: ' + by('roadJoints')[0]?.msg);
+  assert.equal(by('footwayStubs').length, 0, 'footwayStubs: ' + by('footwayStubs')[0]?.msg);
+  assert.equal(by('deckOverPath').length, 0, 'deckOverPath: ' + by('deckOverPath')[0]?.msg);
   console.log(`qa: tiles ${rep.stats.tiles}, road joints ${rep.stats.roadJoints} (gaps ${rep.stats.roadJointGaps}), warns ${rep.warns.length}`);
   for (const w of rep.warns) console.log('  warn:', w.check, w.msg);
 });

@@ -5,6 +5,16 @@
 const CELL = 32;
 const key = (i, j) => i + ',' + j;
 
+// a footway left shorter than this after road/ramp clipping is an orphan stub — it must be dropped,
+// not shipped as a white rectangle in the grass. Tagged crossings stay whole across the carriageway.
+export const SHORT_FOOTWAY_M = 12;
+export const footwayStub = (r, min = SHORT_FOOTWAY_M) => {
+  if (r.cls < 8 || (r.flags & 2) || r.isCrossing || !r.pts || !(r.flags & 4)) return false;
+  let L = 0;
+  for (let k = 2; k < r.pts.length; k += 2) L += Math.hypot(r.pts[k] - r.pts[k - 2], r.pts[k + 1] - r.pts[k - 1]) / 100;
+  return L < min;
+};
+
 export const makeRoadIndex = (roads) => {
   const cells = new Map();
   for (const r of roads) {

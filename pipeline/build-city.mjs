@@ -318,7 +318,7 @@ for (const el of roadsEls) {
   const speed = isNaN(num(t.maxspeed)) ? SDEF[cls] : num(t.maxspeed);
   // flags bit0 oneway(-1), bit1 bridge (deck heights ride in the record's ys; docs/mpk-format.md)
   const taggedBridge = !!(t.bridge && t.bridge !== 'no');
-  const rec = { cls, flags: (oneway === -1 ? 1 : oneway) | (taggedBridge ? 2 : 0), name: t.name || undefined, lanes, w10: Math.round(width * 10), osmBridge: taggedBridge };
+  const rec = { cls, flags: (oneway === -1 ? 1 : oneway) | (taggedBridge ? 2 : 0), name: t.name || undefined, lanes, w10: Math.round(width * 10), osmBridge: taggedBridge, isCrossing: !!(t.crossing && t.crossing !== 'no') };
   ribbonLines.push({ pts, rec });
   stats.roadRecs++;
   if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed, width, osmId: el.id });
@@ -593,19 +593,20 @@ stats.droppedRedundantBridges = droppedRedundantBridges;
 // piece out of the way (keep its dry ends) instead of dropping the whole path; a span high enough
 // to walk under is not a conflict. QA re-checks the same rule on the packed result.
 const liveDecks = decks.filter((d) => d.tile.r.includes(d.rec));
+const runLen = (p) => { let L = 0; for (let k = 2; k < p.length; k += 2) L += Math.hypot(p[k] - p[k - 2], p[k + 1] - p[k - 1]); return L; };
 let deckPathsClipped = 0;
 for (const t of tiles.values()) {
   const ox = t.tx * S, oz = t.tz * S, out = [];
   for (const r of t.r) {
-    if (r.flags & 2 || r.cls < 8) { out.push(r); continue; } // only footways/paths — cutting a carriageway leaves a gap
+    if (r.flags & 2 || r.cls < 8 || r.isCrossing) { out.push(r); continue; } // tagged crossings belong across the road
     const p = [];
     for (let k = 0; k < r.pts.length; k += 2) p.push(ox + r.pts[k] / CM, oz + r.pts[k + 1] / CM);
     const hw = (r.w10 || 80) / 20;
     const hit = liveDecks.find((d) => deckCoversWay(p, hw, d));
     if (!hit) { out.push(r); continue; }
     deckPathsClipped++;
-    for (const run of uncoveredWayRuns(p, hw, hit)) if (run.length >= 4)
-      out.push({ ...r, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) });
+    for (const run of uncoveredWayRuns(p, hw, hit)) if (run.length >= 4 && runLen(run) >= 12)
+      out.push({ ...r, flags: r.flags | 4, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) });
   }
   t.r = out;
 }
@@ -627,8 +628,8 @@ for (const t of tiles.values()) {
     const runs = footwayRoadRuns(p, roadIndex);
     if (!runs) { out.push(r); continue; }
     footwaysClipped++;
-    for (const run of runs) if (run.length >= 4)
-      out.push({ ...r, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) });
+    for (const run of runs) if (run.length >= 4 && runLen(run) >= 12) // drop orphan stubs at the kerb
+      out.push({ ...r, flags: r.flags | 4, pts: run.map((v, k) => Math.round(v * CM) - (k % 2 ? oz * CM : ox * CM)) });
   }
   t.r = out;
 }

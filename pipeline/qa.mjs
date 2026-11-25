@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
 import { makeMask, submerged, inWater, crossesBig, crossesWaterAny, WET_BUILDING } from './lib/water-mask.mjs';
+import { makeRoadIndex, footwayRoadRuns, footwayStub, SHORT_FOOTWAY_M } from './lib/road-clip.mjs';
 import { makeDeck, buildingHitsDeck, deckCoversWay } from './lib/bridge-conflicts.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,7 +64,7 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
     W.waters.push(...recs.w.map((w) => ({ pts: w.pts, ox, oz, tile: i })));
     W.lines.push(...recs.wl.map((w) => ({ pts: w.pts, hw: ({ 8: 12, 9: 4, 10: 12 })[w.kind] / 2, ox, oz, tile: i })));
     W.blds.push(...recs.b.map((b) => ({ pts: b.pts, ox, oz, tile: i, osmId: b.osmId, top: (b.base10 + b.h10) / 10 })));
-    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, cls: r.cls, flags: r.flags, ys: r.ys })));
+    W.roads.push(...recs.r.map((r) => ({ pts: r.pts, ox, oz, tile: i, hw: (r.w10 || 80) / 20, cls: r.cls, flags: r.flags, ys: r.ys, isCrossing: r.isCrossing })));
   }
   stats.tiles = P.h.tiles.length;
 
@@ -144,6 +145,20 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   if (deckPaths) errors.push({ check: 'deckOverPath',
     msg: `${deckPaths} ground way(s) run under a low bridge ramp`, fix: deckPathFix });
   stats.deckPathsUnderRamps = deckPaths;
+
+  // clipping a footway at a carriageway/ramp must not ship a tiny orphan stub (the white rectangle
+  // in the grass). New cities get the same gate; tagged crossings are intentionally whole.
+  let stubs = 0; const stubFix = [];
+  const nearCrossing = (x, z) => (P.h.crossings || []).some((c) => Math.hypot(c.x - x, c.z - z) < 4);
+  for (const r of W.roads) if (footwayStub(r)) {
+    const x = r.ox + r.pts[0] / 100, z = r.oz + r.pts[1] / 100;
+    if (nearCrossing(x, z)) continue; // a tagged crossing is meant to span the road
+    stubs++;
+    if (stubFix.length < 8) stubFix.push({ tile: r.tile, x, z });
+  }
+  if (stubs) errors.push({ check: 'footwayStubs',
+    msg: `${stubs} footway stub(s) shorter than ${SHORT_FOOTWAY_M} m`, fix: stubFix });
+  stats.footwayStubs = stubs;
 
   // ---------- render check: road joints covered (buildWorld once) ----------
   const W2 = await E.buildWorld(P);
