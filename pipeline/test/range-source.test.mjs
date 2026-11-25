@@ -34,12 +34,13 @@ test('range: header first, tile slices on demand, repeated reads coalesce', asyn
   assert.equal(src.total, u8.byteLength);
   assert.equal(new DataView(src.u8.buffer).getUint32(0, true), 0x314b504d);
   assert.ok(src.u8.byteLength >= 8 + new DataView(src.u8.buffer).getUint32(4, true));
-  assert.equal(seen.length, 1, 'one request for the header');
+  assert.ok(seen.length >= 1 && seen.length <= 2, 'one or two header probes (large header spans two chunks)');
+  const probes = seen.length;
   const [x, z, off, len] = [0, 0, 100000, 512];
   const a = await src.read(off, len), b = await src.read(off, len);
   assert.equal(a.byteLength, len);
   assert.deepEqual(Array.from(a.slice(0, 8)), Array.from(u8.subarray(off, off + 8)));
-  assert.equal(seen.length, 2, 'two identical reads share one network request');
+  assert.equal(seen.length, probes + 1, 'two identical reads share one network request');
   assert.deepEqual(Array.from(b), Array.from(a), 'cached block serves both reads');
 });
 
