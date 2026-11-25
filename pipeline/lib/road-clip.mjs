@@ -11,7 +11,7 @@ export const makeRoadIndex = (roads) => {
     if (r.cls > 7 || !r.pts || r.pts.length < 4) continue;
     for (let k = 0; k + 3 < r.pts.length; k += 2) {
       const ax = r.pts[k], az = r.pts[k + 1], bx = r.pts[k + 2], bz = r.pts[k + 3];
-      const hw = (r.width || 8) / 2 + 1;
+      const hw = (r.width || 8) / 2 + 3; // include the kerb, where mappers end the footway
       const s = [ax, az, bx, bz, hw];
       const i0 = Math.floor((Math.min(ax, bx) - hw) / CELL), i1 = Math.floor((Math.max(ax, bx) + hw) / CELL);
       const j0 = Math.floor((Math.min(az, bz) - hw) / CELL), j1 = Math.floor((Math.max(az, bz) + hw) / CELL);
