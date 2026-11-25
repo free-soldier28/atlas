@@ -284,13 +284,13 @@ const startFill = () => {
     if (r) Q.writeBuffer(bInst, r.i0 * 48, Wd.inst.slice(r.i0 * 48, r.i1 * 48));
   };
   const pump = () => {
-    const got = Wd.fillNext(8, 4);
+    const got = Wd.fillNext(8, 4, F[CX], F[CZ]);
     for (const i of got) upload(i);
     if (Wd.filledCount() === total && rebakeShadows && !rebaked) { rebaked = true; rebakeShadows(); }
     if (Wd.filledCount() < total) schedule();
   };
   const schedule = () => { if (typeof requestIdleCallback === 'function') requestIdleCallback(pump, { timeout: 120 }); else setTimeout(pump, 0); };
-  window.__lazyFill = () => { let n = 0; for (;;) { const got = Wd.fillNext(64, 1e9); if (!got.length) break; for (const i of got) upload(i); n += got.length; } return n; };
+  window.__lazyFill = () => { let n = 0; for (;;) { const got = Wd.fillNext(64, 1e9, F[CX], F[CZ]); if (!got.length) break; for (const i of got) upload(i); n += got.length; } return n; };
   window.__lazyProgress = () => `${Wd.filledCount()}/${total}`;
   schedule();
 };

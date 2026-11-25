@@ -532,6 +532,7 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     // nearest tiles first around the start camera (3x3 by default), in case fillNext has a budget
     const [fx, fz] = opts.focus || [0, 0];
     focusOrder = nearest(inds, fx, fz);
+    const todo = new Set(inds);
     const done = new Set();
     filledCount = () => done.size;
     tilesFor = (i) => {
@@ -540,13 +541,16 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
       return out;
     };
     const fill = (i) => {
-      if (done.has(i) || !ranges[i]) return false;
+      if (!todo.has(i) || !ranges[i]) return false;
       const r = ranges[i]; slot = { t: r.t0, i: r.i0 };
-      tile(i, tileData[i]); slot = null; done.add(i); return true;
+      tile(i, tileData[i]); slot = null; todo.delete(i); done.add(i); return true;
     };
-    fillNext = (max = 8, budget = 4) => {
+    // re-rank UNFILLED tiles every pump: the queue was ordered around the start camera, and walking
+    // it in that fixed order leaves water pending (the ground plane is global and always drawn)
+    // wherever the player turns to. Nearest-to-CAMERA first makes the visible river appear at once.
+    fillNext = (max = 8, budget = 4, cx = 0, cz = 0) => {
       const out = [], t0 = performance.now();
-      for (const i of focusOrder) {
+      for (const i of nearest([...todo], cx, cz)) {
         if (done.has(i)) continue;
         if (fill(i)) out.push(i);
         if (out.length >= max || performance.now() - t0 >= budget) break;

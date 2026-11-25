@@ -40,10 +40,23 @@ test('lazy: every mesh reserved for a focus tile is real, distant ones stay pend
   assert.ok(filled > 0 && pending > 0);
 });
 
+test('lazy: after the camera moves, the far tile is filled first — no more missing river on the way back', () => {
+  const S = P2.h.tileSize;
+  let far = -1, fd = -1, fx = 0, fz = 0;
+  P2.h.tiles.forEach(([tx, tz], i) => {
+    const x = (tx + .5) * S, z = (tz + .5) * S, d = Math.hypot(x, z);
+    if (d > fd) { fd = d; far = i; fx = x; fz = z; }
+  });
+  const got = lazy.fillNext(1, 1e9, fx, fz);
+  assert.deepEqual(got, [far], 'nearest tile to the CURRENT camera is meshed, not the next one in the startup order');
+  assert.ok(lazy.tilesFor(far).some((m) => m.ni > 0 || m.pending === 0), 'its meshes are ready to draw');
+});
+
 test('lazy: fillNext completes all tiles with byte-identical geometry', () => {
+  const left = P2.h.tiles.length - lazy.filledCount();
   let n = 0;
   for (;;) { const got = lazy.fillNext(64, 1e9); n += got.length; if (!got.length) break; }
-  assert.equal(n, P2.h.tiles.length - 9, 'every remaining tile filled');
+  assert.equal(n, left, 'every remaining tile filled');
   assert.equal(lazy.filledCount(), P2.h.tiles.length);
   assert.equal(lazy.meshes.filter((m) => m.pending).length, 0, 'no slot left empty');
   let bad = 0;
@@ -63,6 +76,6 @@ test('lazy: browser wiring keeps static buffers and switches draws on as tiles l
   assert.match(m, /const LAZY = !POOL && \(QP\.has\('lazy'\) \|\| \(!AUTO && !QP\.has\('full'\)\)\)/, 'interactive sessions are lazy by default');
   assert.match(m, /if \(m\.pending\) continue;/, 'empty slots are not uploaded');
   assert.match(m, /s\.mesh\.pending \? 0 : s\.mesh\.ni/, 'pending indirect draws start at zero index count');
-  assert.match(m, /Q\.writeBuffer\(bArgs\[0\], si \* 20, arg\)/, 'fills refresh their indirect draws');
+  assert.match(m, /fillNext\(8, 4, F\[CX\], F\[CZ\]\)/, 'the background pump passes the current camera to the filler');
   assert.match(m, /rebakeShadows\(\)/, 'baked shadows are refreshed once the queue drains');
 });
