@@ -20,14 +20,10 @@ jobs:
       - name: Run tests
         run: node --test --test-concurrency=1 pipeline/test/*.mjs
 
-  deploy:
+  build-pages:
     needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,11 +37,18 @@ jobs:
         run: node source/build-all.mjs
       - name: Stage Pages site
         run: mkdir -p site && cp index.html site/index.html
-      - name: Let the artifact register before deploy
-        run: sleep 20
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+  deploy:
+    needs: build-pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
