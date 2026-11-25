@@ -53,6 +53,12 @@ test('collectCrossings: a footway crossing two roads still produces one zebra', 
   assert.equal(collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads).length, 1);
 });
 
+test('collectCrossings: a footway running along the only nearby road gets no zebra', () => {
+  const roads = [{ pts: [-100, 0, 100, 0], cls: 5, width: 8, osmId: 1, nodeIds: [1, 2] }];
+  const foot = [{ pts: [0, -3, 40, -3], crossing: 'unmarked', nodeIds: [10, 11] }];
+  assert.equal(collectCrossings(foot, roads).length, 0, 'parallel is not a crossing');
+});
+
 test('collectCrossings: crossing=no and far-away ways are ignored', () => {
   const road = [{ pts: [-100, 0, 100, 0], cls: 5, width: 8 }];
   assert.equal(collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'no' }], road).length, 0);

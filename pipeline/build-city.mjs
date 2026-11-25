@@ -321,7 +321,7 @@ for (const el of roadsEls) {
   const rec = { cls, flags: (oneway === -1 ? 1 : oneway) | (taggedBridge ? 2 : 0), name: t.name || undefined, lanes, w10: Math.round(width * 10), osmBridge: taggedBridge };
   ribbonLines.push({ pts, rec });
   stats.roadRecs++;
-  if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed, width });
+  if (drivable(cls)) drivableWays.push({ nodeIds, pts, cls, flags: rec.flags, name: t.name || undefined, lanes, speed, width, osmId: el.id });
 }
 
 // mappers cut one road into many ways at every junction; two ways that merely continue each other
@@ -659,7 +659,7 @@ const crossingWays = [];
 for (const el of roadsEls) {
   if (el.type !== 'way' || !el.tags?.crossing || !el.geometry) continue;
   const pts = linePts(el.geometry);
-  if (pts && pts.length >= 4) crossingWays.push({ pts, crossing: el.tags.crossing });
+  if (pts && pts.length >= 4) crossingWays.push({ pts, crossing: el.tags.crossing, nodeIds: el.nodes || [] });
 }
 const crossings = collectCrossings(crossingWays, drivableWays);
 stats.crossings = crossings.length;
@@ -669,7 +669,7 @@ const tileList = [...tiles.values()].sort((a, b) => a.tx - b.tx || a.tz - b.tz);
 let stringsCount = 0;
 const emitPack = () => {
 const B = new MPKBuilder({ id: ID, name: NAME, origin: ORIGIN, tileSize: S, bbox: BBOX, poses, fly: null, terrain: null });
-B.h.crossings = crossings;
+B.h.crossings = crossings.map(({ road, ...c }) => c);
 for (const t of tileList) {
   const layers = [];
   if (t.b.length) layers.push({ kind: 1, recs: t.b });

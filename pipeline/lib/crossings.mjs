@@ -28,7 +28,7 @@ export const collectCrossings = (crossingWays, drivableWays) => {
     if (!w.pts || w.pts.length < 4) continue;
     for (let k = 0; k + 3 < w.pts.length; k += 2) {
       const ax = w.pts[k], az = w.pts[k + 1], bx = w.pts[k + 2], bz = w.pts[k + 3];
-      const seg = [ax, az, bx, bz, w.cls, w.width || 8];
+      const seg = [ax, az, bx, bz, w.cls, w.width || 8, w.osmId || 0, w.nodeIds || null];
       const i0 = Math.floor(Math.min(ax, bx) / CELL), i1 = Math.floor(Math.max(ax, bx) / CELL);
       const j0 = Math.floor(Math.min(az, bz) / CELL), j1 = Math.floor(Math.max(az, bz) / CELL);
       for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
@@ -40,10 +40,11 @@ export const collectCrossings = (crossingWays, drivableWays) => {
   }
   const out = [];
   const add = (s, p, kind) => {
-    if (out.some((c) => Math.hypot(c.x - p[0], c.z - p[1]) < 2)) return;
+    // two OSM footways ending at the same junction often describe the SAME zebra; merge them
+    if (out.some((c) => Math.hypot(c.x - p[0], c.z - p[1]) < (c.road === s[6] ? 25 : 2))) return;
     out.push({ x: Math.round(p[0] * 100) / 100, z: Math.round(p[1] * 100) / 100,
       a: Math.round(Math.atan2(s[3] - s[1], s[2] - s[0]) * 1e3) / 1e3,
-      w: Math.round(s[5] * 10) / 10, k: kind });
+      w: Math.round(s[5] * 10) / 10, k: kind, road: s[6] });
   };
   for (const w of crossingWays) {
     const kind = kindOf(w.crossing);
@@ -71,19 +72,23 @@ export const collectCrossings = (crossingWays, drivableWays) => {
         const fx = atEnd ? w.pts[n * 2 - 2] - w.pts[n * 2 - 4] : w.pts[2] - w.pts[0];
         const fz = atEnd ? w.pts[n * 2 - 1] - w.pts[n * 2 - 3] : w.pts[3] - w.pts[1];
         const fl = Math.hypot(fx, fz) || 1;
-        const i0 = Math.floor((ex - 5) / CELL), i1 = Math.floor((ex + 5) / CELL);
-        const j0 = Math.floor((ez - 5) / CELL), j1 = Math.floor((ez + 5) / CELL);
+        const i0 = Math.floor((ex - 14) / CELL), i1 = Math.floor((ex + 14) / CELL);
+        const j0 = Math.floor((ez - 14) / CELL), j1 = Math.floor((ez + 14) / CELL);
         for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (const s of grid.get(cellKey(i, j)) || []) {
           const dx = s[2] - s[0], dz = s[3] - s[1], dl = Math.hypot(dx, dz) || 1;
           const t = Math.max(0, Math.min(1, ((ex - s[0]) * dx + (ez - s[1]) * dz) / (dl * dl)));
           const px = s[0] + dx * t, pz = s[1] + dz * t, d = Math.hypot(px - ex, pz - ez);
-          if (d > 5) continue;
+          if (d > s[5] / 2 + 2) continue; // kerb-to-centreline depends on road width, not a flat 5 m
           const sin = Math.abs(dx * fz - dz * fx) / (dl * fl); // 1 = footway ⟂ road
-          // a parallel snap is a wrong crossing; keep it only as a last resort for coverage
-          const score = (1 - sin) * 8 + d / 5 + (s[4] || 9) * .05;
-          cand.push({ s, p: [px, pz], score: sin < .57 ? score + 20 : score });
+          if (sin < .7) continue; // a parallel footway is NOT a crossing — never paint a zebra there
+          // mappers often make the footway END ON a node of the road way: that shared node identifies
+          // the crossed road at a junction far more reliably than distance to nearby side streets.
+          const shared = !!(w.nodeIds && s[7] && w.nodeIds.some((id) => s[7].includes(id)));
+          cand.push({ s, p: [px, pz], shared, score: (1 - sin) * 8 + d / 5 + (s[4] || 9) * .05 - (shared ? 20 : 0) });
         }
       }
+      const shared = cand.filter((c) => c.shared);
+      if (shared.length) cand.splice(0, cand.length, ...shared);
     }
     if (cand.length) {
       cand.sort((a, b) => a.score - b.score);
