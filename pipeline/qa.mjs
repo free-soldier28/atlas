@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { engine, openPack } from './lib/worldharness.mjs';
 import { makeMask, submerged, inWater, crossesBig, crossesWaterAny, WET_BUILDING } from './lib/water-mask.mjs';
-import { makeRoadIndex, footwayRoadRuns, footwayStub, SHORT_FOOTWAY_M } from './lib/road-clip.mjs';
+import { makeRoadIndex, makeFootprintIndex, footwayNearBuilding, footwayOnRoad, footwayStub, SHORT_FOOTWAY_M } from './lib/road-clip.mjs';
 import { makeDeck, buildingHitsDeck, deckCoversWay } from './lib/bridge-conflicts.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -159,6 +159,23 @@ export async function qa(packFile = 'packs/grodno.mpk', { jointSamples = 320 } =
   if (stubs) errors.push({ check: 'footwayStubs',
     msg: `${stubs} footway stub(s) shorter than ${SHORT_FOOTWAY_M} m`, fix: stubFix });
   stats.footwayStubs = stubs;
+
+  // a footway skirting a building must not end up painted over the carriageway
+  const bCells = makeFootprintIndex(W.blds.map((b) => ({ pts: toWorld(b) })));
+  const rCells = makeRoadIndex(W.roads.filter((r) => !(r.flags & 2) && r.cls <= 7)
+    .map((r) => ({ cls: r.cls, width: r.hw * 2, pts: toWorld(r) })));
+  let onRoad = 0; const roadFix = [];
+  for (const r of W.roads) {
+    if (r.cls < 8 || (r.flags & 2)) continue;
+    const g = toWorld(r);
+    if (nearCrossing(g[0], g[1])) continue;
+    if (!footwayNearBuilding(g, bCells) || footwayOnRoad(g, rCells) < .5) continue;
+    onRoad++;
+    if (roadFix.length < 8) roadFix.push({ tile: r.tile, x: g[0], z: g[1] });
+  }
+  if (onRoad) errors.push({ check: 'footwayOnRoad',
+    msg: `${onRoad} footway(s) skirt a building and lie on the carriageway`, fix: roadFix });
+  stats.footwaysOnRoad = onRoad;
 
   // ---------- render check: road joints covered (buildWorld once) ----------
   const W2 = await E.buildWorld(P);
