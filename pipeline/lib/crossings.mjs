@@ -40,8 +40,13 @@ export const collectCrossings = (crossingWays, drivableWays) => {
   }
   const out = [];
   const add = (s, p, kind, heading) => {
-    // two OSM footways ending at the same junction often describe the SAME zebra; merge them
-    if (out.some((c) => Math.hypot(c.x - p[0], c.z - p[1]) < (c.road === s[6] ? 25 : 2))) return;
+    // At a junction several footways and road arms describe the SAME patch of asphalt. Merge any
+    // candidate within 12 m (regardless of which road was snapped) and keep the better marking.
+    const near = out.findIndex((c) => Math.hypot(c.x - p[0], c.z - p[1]) < 12);
+    if (near >= 0) {
+      if (kind < out[near].k) out[near].k = kind;
+      return;
+    }
     out.push({ x: Math.round(p[0] * 100) / 100, z: Math.round(p[1] * 100) / 100,
       a: Math.round((heading === undefined ? Math.atan2(s[3] - s[1], s[2] - s[0]) : heading) * 1e3) / 1e3,
       w: Math.round(s[5] * 10) / 10, k: kind, road: s[6] });
@@ -58,8 +63,13 @@ export const collectCrossings = (crossingWays, drivableWays) => {
       for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
         for (const s of grid.get(cellKey(i, j)) || []) {
           const p = intersect(ax, az, bx, bz, s[0], s[1], s[2], s[3]);
-          if (p) cand.push({ s, p, heading: Math.atan2(bz - az, bx - ax) + Math.PI / 2,
-            score: -10 + Math.hypot(p[0] - mid[0], p[1] - mid[1]) / 20 });
+          if (p) {
+            const fx = bx - ax, fz = bz - az, fl = Math.hypot(fx, fz) || 1;
+            const dx = s[2] - s[0], dz = s[3] - s[1], dl = Math.hypot(dx, dz) || 1;
+            if (Math.abs(dx * fz - dz * fx) / (dl * fl) < .5) continue; // footway running along the road
+            cand.push({ s, p, heading: Math.atan2(fz, fx) + Math.PI / 2,
+              score: -10 + Math.hypot(p[0] - mid[0], p[1] - mid[1]) / 20 });
+          }
         }
       }
     }
@@ -98,10 +108,12 @@ export const collectCrossings = (crossingWays, drivableWays) => {
     }
   }
   // at a junction the visual carriageway merges several OSM ways; a zebra sized from the one
-  // snapped segment sits as an isolated patch in the middle of the asphalt. Widen it to cover
-  // every parallel road corridor touching the crossing point.
+  // snapped segment sits as an isolated patch in the middle of the asphalt. Widen it ONLY for
+  // parallel corridors that pass through the same crossing line — not for every road within 25 m,
+  // which used to blow the width up to the 40 m cap and paint bars far into the grass.
   for (const c of out) {
     const ux = Math.cos(c.a), uz = Math.sin(c.a);
+    const nx = -uz, nz = ux;
     let half = (c.w || 8) / 2;
     const ci = Math.floor(c.x / CELL), cj = Math.floor(c.z / CELL);
     for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++)
@@ -109,11 +121,12 @@ export const collectCrossings = (crossingWays, drivableWays) => {
         const dx = s[2] - s[0], dz = s[3] - s[1], dl = Math.hypot(dx, dz) || 1;
         if (Math.abs(dx * uz - dz * ux) / dl > .42) continue; // a different road at the junction
         const t = Math.max(0, Math.min(1, ((c.x - s[0]) * dx + (c.z - s[1]) * dz) / (dl * dl)));
-        const d = Math.hypot(c.x - s[0] - dx * t, c.z - s[1] - dz * t);
-        if (d > 25) continue;
-        half = Math.max(half, d + s[5] / 2);
+        const ex = c.x - s[0] - dx * t, ez = c.z - s[1] - dz * t;
+        const along = Math.abs(ex * ux + ez * uz), across = Math.abs(ex * nx + ez * nz);
+        if (along > 6 || across > 14) continue; // not the same stretch of carriageway
+        half = Math.max(half, across + s[5] / 2);
       }
-    c.w = Math.round(Math.min(half * 2, 40) * 10) / 10;
+    c.w = Math.round(Math.min(half * 2, 24) * 10) / 10;
   }
   return out;
 };

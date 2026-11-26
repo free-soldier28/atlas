@@ -62,6 +62,34 @@ test('collectCrossings: a junction zebra spans all parallel carriageways', () =>
   const out = collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads);
   assert.equal(out.length, 1);
   assert.ok(out[0].w > 20, `zebra width ${out[0].w} covers both parallel roads, not a lone patch`);
+  assert.ok(out[0].w <= 24, 'but never blows up to a 40 m band across the grass');
+});
+
+test('collectCrossings: a parallel carriageway further along the road does not widen the zebra', () => {
+  const roads = [
+    { pts: [-100, 0, 100, 0], cls: 4, width: 10, osmId: 1 },
+    { pts: [60, 9, 140, 9], cls: 4, width: 12, osmId: 2 }, // parallel, but 60 m down the street
+  ];
+  const out = collectCrossings([{ pts: [0, -20, 0, 20], crossing: 'zebra' }], roads);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].w, 10, 'only the crossed carriageway sets the span');
+});
+
+test('collectCrossings: a footway meeting a road at a shallow angle gets no zebra', () => {
+  const road = [{ pts: [-100, 0, 100, 0], cls: 4, width: 10 }];
+  const foot = [{ pts: [0, -5, 40, 5], crossing: 'zebra' }];
+  assert.equal(collectCrossings(foot, road).length, 0);
+});
+
+test('collectCrossings: two footways at the same junction merge into one crossing', () => {
+  const road = [{ pts: [-100, 0, 100, 0], cls: 4, width: 10 }];
+  const foot = [
+    { pts: [0, -20, 0, 20], crossing: 'unmarked' },
+    { pts: [5, -20, 5, 20], crossing: 'zebra' },
+  ];
+  const out = collectCrossings(foot, road);
+  assert.equal(out.length, 1, 'one painted patch, not two overlapping zebras');
+  assert.equal(out[0].k, 0, 'the marked crossing wins');
 });
 
 test('collectCrossings: a footway running along the only nearby road gets no zebra', () => {
@@ -80,12 +108,13 @@ test('pack ships real crossings and the renderer paints them', async () => {
   const P = await openPack();
   const cs = P.h.crossings;
   assert.ok(cs && cs.length > 50, `expected hundreds of mapped crossings, got ${cs?.length || 0}`);
-  assert.ok(cs.every((c) => Number.isFinite(c.x) && Number.isFinite(c.z) && Number.isFinite(c.a) && c.w > 0));
+  assert.ok(cs.every((c) => Number.isFinite(c.x) && Number.isFinite(c.z) && Number.isFinite(c.a) && c.w > 0 && c.w <= 24));
   const src = readFileSync(path.join(ROOT, 'source', 'src', 'world.js'), 'utf8');
   assert.match(src, /PK\.h\.crossings/, 'world reads the header list');
   assert.match(src, /mb\.quad\(a, b, d, e\)/, 'zebra bars are real geometry');
   assert.match(src, /cx = c\.x \+ nx \* o, cz = c\.z \+ nz \* o/, 'bars repeat across the road');
   assert.match(src, /cx - ux \* half, 0\.095, cz - uz \* half/, 'each bar runs along the road');
+  assert.match(src, /half = c\.k === 2 \? 1\.2 : 1\.8/, 'bar length is a short fixed depth, not the road width');
   const cache = hasCache('roads') ? readCache('roads').filter((e) => e.tags?.crossing && e.tags.crossing !== 'no') : null;
   if (cache) assert.ok(cache.length > 100, 'the OSM cache really contains crossing tags');
 });

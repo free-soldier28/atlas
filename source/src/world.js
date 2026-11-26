@@ -574,12 +574,13 @@ async function buildWorld(PK, opts = {}) { // async: tiles and the graph inflate
     const mb = new MB(min(CS.length * 96, 1 << 17)); mb.mat = M.PLASTER;
     for (const c of CS) {
       if (!isFinite(c.x) || !isFinite(c.z) || !isFinite(c.a)) continue;
-      const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux, half = min((c.w || 8) / 2, 20);
-      // real zebra: wide bars, tight gaps, numbered like the painted crossing. Unmarked ones get
-      // a thinner, sparser pattern so the two kinds read differently at a glance.
-      // longitudinal zebra: each bar runs ALONG the carriageway, the row of bars spans its width
-      // (the style in the reference — the old crosswise bars read as a ladder across the road).
-      const nBar = c.k === 2 ? 4 : 6, bw = c.k === 2 ? .4 : .8, gap = c.k === 2 ? 1.0 : .6;
+      const ux = cos(c.a), uz = sin(c.a), nx = -uz, nz = ux;
+      // The row spans the road width; each short bar runs along the carriageway (the reference
+      // style). Bar length must NOT scale with the road width: a wide junction record would then
+      // paint 40 m stripes reaching far into the grass. Keep the painted patch inside the asphalt.
+      const span = min(max((c.w || 8) / 2, 3), 12), half = c.k === 2 ? 1.2 : 1.8;
+      const bw = c.k === 2 ? .4 : .6, gap = c.k === 2 ? .8 : .5;
+      const nBar = max(2, min(12, floor(span * 2 / (bw + gap))));
       for (let s = 0; s < nBar; s++) {
         const o = (s - (nBar - 1) / 2) * (bw + gap), cx = c.x + nx * o, cz = c.z + nz * o;
         const a = mb.v(cx - ux * half, 0.095, cz - uz * half, 0, 1, 0);
