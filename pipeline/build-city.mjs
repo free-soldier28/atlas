@@ -660,16 +660,18 @@ const poses = [
 ];
 
 // ---------- pedestrian crossings ----------
-// Every footway/path that geometrically crosses a carriageway gets a zebra: tagged ones keep their
-// marking kind, untagged ones are painted as unmarked. Painting instead of clipping the way keeps
-// sidewalks continuous through junctions (no white stubs ending in the grass).
+// OSM is the only source of crossings: a way mapped with crossing=* is a crossing, a footway that
+// happens to touch a road is not. Painting invented zebras on every such touch filled junctions
+// with overlapping bands. Footways stay continuous — no clipping at the kerb.
 const crossingWays = [];
 for (const el of roadsEls) {
   if (el.type !== 'way' || !el.geometry) continue;
+  const crossing = el.tags?.crossing;
+  if (!crossing) continue;
   const cls = RCLS[el.tags?.highway];
   if (cls === undefined || cls < 8) continue;
   const pts = linePts(el.geometry);
-  if (pts && pts.length >= 4) crossingWays.push({ pts, crossing: el.tags.crossing || 'unmarked', nodeIds: el.nodes || [] });
+  if (pts && pts.length >= 4) crossingWays.push({ pts, crossing, nodeIds: el.nodes || [] });
 }
 const crossings = collectCrossings(crossingWays, drivableWays);
 stats.crossings = crossings.length;

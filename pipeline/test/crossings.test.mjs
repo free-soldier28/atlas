@@ -104,6 +104,12 @@ test('collectCrossings: crossing=no and far-away ways are ignored', () => {
   assert.equal(collectCrossings([{ pts: [0, -200, 0, -180], crossing: 'yes' }], road).length, 0);
 });
 
+test('the build paints only OSM-tagged crossings, not every footway touching a road', () => {
+  const src = readFileSync(path.join(ROOT, 'pipeline', 'build-city.mjs'), 'utf8');
+  assert.match(src, /const crossing = el\.tags\?\.crossing;\s*if \(!crossing\) continue;/, 'untagged footways are skipped');
+  assert.doesNotMatch(src, /crossing: el\.tags\.crossing \|\| 'unmarked'/, 'no invented unmarked crossings');
+});
+
 test('pack ships real crossings and the renderer paints them', async () => {
   const P = await openPack();
   const cs = P.h.crossings;
