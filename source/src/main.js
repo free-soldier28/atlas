@@ -219,12 +219,12 @@ await say('Loading map pack…', 0.18);
 await loadPack();
 if (PK.h.poses) POSES = PK.h.poses; // viewpoints for keys 1-6 come from the pack when it has them
 if (PK.h.fly) FLY = Float32Array.from(PK.h.fly); // the pack's fly-through replaces the default lap
-// Lazy tiles: interactive sessions mesh only the 3x3 tiles around the start camera before the first
-// frame; the rest are filled in the background. AUTO probes stay deterministic (full build) unless
-// they pass ?lazy explicitly, and ?full forces the old eager path in the browser.
-// Phase B: ?pool=N turns on the streaming tile pool (fixed GPU footprint, camera-follow loads).
+// Tiles: the default is a FULL build. Lazy mode reserved slot geometry for all 980 tiles but meshed
+// only ~9 up front, while the baked shadow proxy still cast every building — flying to an unloaded
+// district showed only shadows and labels, with no walls or roads. Lazy is now explicit opt-in for
+// low-memory devices (?lazy); ?pool=N is the streaming alternative (fixed footprint, camera-follow).
 const POOL = QP.has('pool') ? clamp(+QP.get('pool') || 16, 4, 64) : 0;
-const LAZY = !POOL && (QP.has('lazy') || (!AUTO && !QP.has('full')));
+const LAZY = !POOL && QP.has('lazy');
 const focus = POSES.length ? [POSES[0][0], POSES[0][2]] : [0, 0];
 const nTiles = QP.has('tiles') ? max(1, min(PK.h.tiles.length, +QP.get('tiles') || 9)) : 9;
 const Wd = await buildWorld(PK, POOL ? { pool: POOL, focus } : LAZY ? { lazy: true, focus, count: nTiles, limit: QP.has('tiles') ? nTiles : 0 } : {});

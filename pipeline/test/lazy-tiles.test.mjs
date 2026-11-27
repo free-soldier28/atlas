@@ -73,7 +73,7 @@ test('lazy: browser wiring keeps static buffers and switches draws on as tiles l
   assert.match(w, /if \(opts\.lazy\)/, 'lazy mode is opt-in at the world builder');
   assert.match(w, /slot = \{ t: r\.t0, i: r\.i0 \}/, 'fills write into pre-reserved slot ranges');
   assert.match(w, /dst\.vb = src\.vb; dst\.ib = src\.ib/, 'mesh objects are filled in place (slot identity preserved)');
-  assert.match(m, /const LAZY = !POOL && \(QP\.has\('lazy'\) \|\| \(!AUTO && !QP\.has\('full'\)\)\)/, 'interactive sessions are lazy by default');
+  assert.match(m, /const LAZY = !POOL && QP\.has\('lazy'\)/, 'lazy mode is opt-in; the default build shows every tile');
   assert.match(m, /if \(m\.pending\) continue;/, 'empty slots are not uploaded');
   assert.match(m, /s\.mesh\.pending \? 0 : s\.mesh\.ni/, 'pending indirect draws start at zero index count');
   assert.match(m, /fillNext\(8, 4, F\[CX\], F\[CZ\]\)/, 'the background pump passes the current camera to the filler');
